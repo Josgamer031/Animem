@@ -1,28 +1,22 @@
 package com.example.ui.screens
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
-import android.view.View
 import android.view.ViewGroup
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +28,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,10 +42,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
-import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
@@ -58,6 +54,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -73,11 +70,13 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -86,6 +85,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -99,23 +99,25 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.R
 import com.example.data.JkAnimeHttpClient
-import com.example.data.VideoStreamResolver
+import com.example.model.AnimeProvider
 import com.example.ui.components.ErrorStateView
-import com.example.ui.viewmodel.PlayerMode
 import com.example.ui.viewmodel.PlayerViewModel
 import com.example.ui.viewmodel.ServerPlaybackSupport
 import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
-import java.io.ByteArrayInputStream
 import java.util.Locale
 
 @Composable
@@ -182,7 +184,11 @@ fun PlayerScreen(
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = if (state.isLoadingServers) "Extrayendo servidores…" else "Resolviendo stream…",
+                                text = if (state.isLoadingServers) {
+                                    "Extrayendo servidores nativos…"
+                                } else {
+                                    "Resolviendo stream directo…"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = Color.White
                             )
@@ -203,40 +209,29 @@ fun PlayerScreen(
                         )
                     }
 
-                    resolved != null &&
-                        state.playerMode == PlayerMode.NATIVE_EXO &&
-                        !resolved.streamUrl.isNullOrBlank() -> {
+                    resolved != null && !resolved.streamUrl.isNullOrBlank() -> {
                         NativeExoPlayerBox(
                             streamUrl = resolved.streamUrl,
+                            isHls = resolved.isHls,
                             headers = resolved.headers,
                             okHttpClient = okHttpClient,
                             resumePositionMs = state.resumePositionMs,
                             isFullscreen = isFullscreen,
+                            hasNextEpisode = state.hasNextEpisode,
+                            nextEpisodeNumber = state.episodeNumber + 1,
                             onToggleFullscreen = { isFullscreen = !isFullscreen },
                             onBack = {
                                 if (isFullscreen) isFullscreen = false else onBack()
                             },
+                            onNextEpisode = viewModel::skipToNextEpisodeIfAvailable,
                             onPlaybackError = viewModel::onNativePlaybackFailed,
                             onSaveProgress = viewModel::saveWatchProgress
-                        )
-                    }
-
-                    resolved != null -> {
-                        InAppWebPlayerBox(
-                            embedUrl = resolved.embedUrl,
-                            headers = resolved.headers,
-                            isFullscreen = isFullscreen,
-                            onToggleFullscreen = { isFullscreen = !isFullscreen },
-                            onBack = {
-                                if (isFullscreen) isFullscreen = false else onBack()
-                            },
-                            onFirstLoad = { viewModel.saveWatchProgress(0L, 0L) }
                         )
                     }
                 }
             }
 
-            // Below-player details, episode switcher, and server list (hidden in fullscreen)
+            // Below-player details, episode switcher, and native server list (hidden in fullscreen)
             if (!isFullscreen) {
                 Column(
                     modifier = Modifier
@@ -313,35 +308,33 @@ fun PlayerScreen(
                             Text(stringResource(R.string.player_prev_episode))
                         }
 
-                        OutlinedButton(
-                            onClick = { viewModel.loadEpisode(state.episodeNumber + 1) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("player_next_episode")
-                        ) {
-                            Text(stringResource(R.string.player_next_episode))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Icon(Icons.Rounded.SkipNext, contentDescription = null)
+                        if (state.hasNextEpisode) {
+                            OutlinedButton(
+                                onClick = { viewModel.skipToNextEpisodeIfAvailable() },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("player_next_episode")
+                            ) {
+                                Text(stringResource(R.string.player_next_episode))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(Icons.Rounded.SkipNext, contentDescription = null)
+                            }
                         }
                     }
 
-                    // Active Playback Mode Banner + Mode Toggle
-                    val hasDirect = !state.resolvedVideo?.streamUrl.isNullOrBlank()
+                    // Active Native Playback Banner
                     val activeServer = state.servers.getOrNull(state.selectedServerIndex)
-                    if (activeServer != null && state.resolvedVideo != null) {
-                        val isNativeActive = state.playerMode == PlayerMode.NATIVE_EXO && hasDirect
+                    val resolvedVideo = state.resolvedVideo
+                    if (activeServer != null && resolvedVideo != null && !resolvedVideo.streamUrl.isNullOrBlank()) {
                         Surface(
-                            color = if (isNativeActive) {
-                                Color(0x2622C55E)
-                            } else {
-                                Color(0x26F59E0B)
-                            },
+                            color = Color(0x2622C55E),
                             shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0x444ADE80)),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("active_playback_banner")
@@ -352,28 +345,20 @@ fun PlayerScreen(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (isNativeActive) Icons.Rounded.SmartDisplay else Icons.Rounded.Language,
+                                    imageVector = Icons.Rounded.SmartDisplay,
                                     contentDescription = null,
-                                    tint = if (isNativeActive) Color(0xFF4ADE80) else Color(0xFFFBBF24),
+                                    tint = Color(0xFF4ADE80),
                                     modifier = Modifier.size(20.dp)
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = if (isNativeActive) {
-                                            "${activeServer.name} · Reproductor Nativo"
-                                        } else {
-                                            "${activeServer.name} · Navegador Integrado"
-                                        },
+                                        text = "${activeServer.name} · Nativo",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = if (isNativeActive) {
-                                            "Stream directo en ExoPlayer (sin anuncios web)"
-                                        } else {
-                                            "Este servidor requiere cargarse en el navegador interno"
-                                        },
+                                        text = "Reproducción nativa en ExoPlayer · Doble toque para adelantar o retroceder 10s",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -382,7 +367,7 @@ fun PlayerScreen(
                         }
                     }
 
-                    // Server Selector with clear Nativo vs Navegador indicator per server
+                    // Native Server Selector
                     if (state.servers.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(
@@ -396,7 +381,11 @@ fun PlayerScreen(
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                                 Text(
-                                    text = "Nativo vs Navegador",
+                                    text = if (state.provider == AnimeProvider.LATANIME) {
+                                        "Solo servidores nativos"
+                                    } else {
+                                        "Desu (Nativo)"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -406,17 +395,18 @@ fun PlayerScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 itemsIndexed(state.servers) { idx, server ->
-                                    val selected = idx == state.selectedServerIndex
-                                    val support = state.serverSupportMap[idx] ?: ServerPlaybackSupport.CHECKING
+                                    val key = server.decodedEmbedUrl.ifBlank { "${server.name}_${server.rawUrl}" }
+                                    val selected = key == state.selectedServerUrl || idx == state.selectedServerIndex
+                                    val support = state.serverSupportMap[key] ?: ServerPlaybackSupport.CHECKING
                                     val tagText = when (support) {
+                                        ServerPlaybackSupport.CHECKING -> "Verificando"
                                         ServerPlaybackSupport.NATIVE_STREAM -> "Nativo"
-                                        ServerPlaybackSupport.WEB_EMBED -> "Navegador"
-                                        ServerPlaybackSupport.CHECKING -> "…"
+                                        ServerPlaybackSupport.UNAVAILABLE -> "No disp."
                                     }
                                     val badgeColor = when (support) {
-                                        ServerPlaybackSupport.NATIVE_STREAM -> Color(0xFF22C55E)
-                                        ServerPlaybackSupport.WEB_EMBED -> Color(0xFFF59E0B)
                                         ServerPlaybackSupport.CHECKING -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        ServerPlaybackSupport.NATIVE_STREAM -> Color(0xFF22C55E)
+                                        ServerPlaybackSupport.UNAVAILABLE -> MaterialTheme.colorScheme.error
                                     }
                                     FilterChip(
                                         selected = selected,
@@ -430,19 +420,12 @@ fun PlayerScreen(
                                                         color = if (selected) Color.White else MaterialTheme.colorScheme.primary
                                                     )
                                                 }
-                                                ServerPlaybackSupport.NATIVE_STREAM -> {
+                                                ServerPlaybackSupport.NATIVE_STREAM,
+                                                ServerPlaybackSupport.UNAVAILABLE -> {
                                                     Icon(
                                                         imageVector = Icons.Rounded.SmartDisplay,
                                                         contentDescription = "Nativo",
                                                         tint = if (selected) Color.White else Color(0xFF4ADE80),
-                                                        modifier = Modifier.size(17.dp)
-                                                    )
-                                                }
-                                                ServerPlaybackSupport.WEB_EMBED -> {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.Language,
-                                                        contentDescription = "Navegador",
-                                                        tint = if (selected) Color.White else Color(0xFFFBBF24),
                                                         modifier = Modifier.size(17.dp)
                                                     )
                                                 }
@@ -458,7 +441,11 @@ fun PlayerScreen(
                                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
                                                 )
                                                 Surface(
-                                                    color = if (selected) Color.White.copy(alpha = 0.22f) else badgeColor.copy(alpha = 0.18f),
+                                                    color = if (selected) {
+                                                        Color.White.copy(alpha = 0.22f)
+                                                    } else {
+                                                        badgeColor.copy(alpha = 0.18f)
+                                                    },
                                                     shape = RoundedCornerShape(6.dp)
                                                 ) {
                                                     Text(
@@ -481,55 +468,6 @@ fun PlayerScreen(
                             }
                         }
                     }
-
-                    // Mode Toggle (Native ExoPlayer vs In-App Web)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "Modo de reproducción",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            FilterChip(
-                                selected = state.playerMode == PlayerMode.NATIVE_EXO,
-                                onClick = {
-                                    if (hasDirect) viewModel.setPlayerMode(PlayerMode.NATIVE_EXO)
-                                },
-                                enabled = hasDirect,
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.SmartDisplay,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                },
-                                label = { Text(stringResource(R.string.player_native_mode)) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                    selectedLabelColor = Color.White
-                                ),
-                                modifier = Modifier.testTag("mode_native_chip")
-                            )
-
-                            FilterChip(
-                                selected = state.playerMode == PlayerMode.IN_APP_WEB,
-                                onClick = { viewModel.setPlayerMode(PlayerMode.IN_APP_WEB) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.Language,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                },
-                                label = { Text(stringResource(R.string.player_web_mode)) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onSecondary
-                                ),
-                                modifier = Modifier.testTag("mode_web_chip")
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -540,26 +478,45 @@ fun PlayerScreen(
 @Composable
 private fun NativeExoPlayerBox(
     streamUrl: String,
+    isHls: Boolean,
     headers: Map<String, String>,
     okHttpClient: OkHttpClient,
     resumePositionMs: Long,
     isFullscreen: Boolean,
+    hasNextEpisode: Boolean,
+    nextEpisodeNumber: Int,
     onToggleFullscreen: () -> Unit,
     onBack: () -> Unit,
-    onPlaybackError: () -> Unit,
+    onNextEpisode: () -> Unit,
+    onPlaybackError: (String) -> Unit,
     onSaveProgress: (Long, Long) -> Unit
 ) {
     val context = LocalContext.current
 
-    val exoPlayer = remember(streamUrl) {
+    val exoPlayer = remember(streamUrl, isHls) {
+        val safeHeaders = headers.filterKeys { k ->
+            k.equals("User-Agent", true) ||
+                k.equals("Referer", true) ||
+                k.equals("Origin", true) ||
+                k.equals("Cookie", true)
+        }
+        val userAgent = safeHeaders["User-Agent"] ?: JkAnimeHttpClient.USER_AGENT
         val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-            .setUserAgent(JkAnimeHttpClient.USER_AGENT)
-            .setDefaultRequestProperties(headers)
+            .setUserAgent(userAgent)
+            .setDefaultRequestProperties(safeHeaders)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+            .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(4))
+        val mediaItemBuilder = MediaItem.Builder().setUri(streamUrl)
+        if (isHls ||
+            streamUrl.contains(".m3u8", ignoreCase = true) ||
+            streamUrl.contains("master.txt", ignoreCase = true)
+        ) {
+            mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        }
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
-                setMediaItem(MediaItem.fromUri(streamUrl))
+                setMediaItem(mediaItemBuilder.build())
                 prepare()
                 if (resumePositionMs > 3_000L) {
                     seekTo(resumePositionMs)
@@ -570,11 +527,33 @@ private fun NativeExoPlayerBox(
 
     var isPlaying by remember { mutableStateOf(true) }
     var isBuffering by remember { mutableStateOf(true) }
+    var isEnded by remember(streamUrl) { mutableStateOf(false) }
     var currentPos by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(true) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var speedMenuExpanded by remember { mutableStateOf(false) }
+    var retriedTransient by remember(streamUrl) { mutableStateOf(false) }
+    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
+    var nextCountdownSec by remember(streamUrl) { mutableIntStateOf(5) }
+    var autoNextCancelled by remember(streamUrl) { mutableStateOf(false) }
+
+    val inEndingRange = duration > 180_000L && currentPos >= duration - 120_000L
+
+    fun performSkipOpEd() {
+        val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+        val total = exoPlayer.duration.coerceAtLeast(0L)
+        val isEndingWindow = total > 180_000L && pos >= total - 120_000L
+        if (isEndingWindow && hasNextEpisode && pos + 85_000L >= total - 6_000L) {
+            onNextEpisode()
+            return
+        }
+        val target = pos + 85_000L
+        val clamped = if (total > 1_500L) target.coerceAtMost(total - 1_500L) else target
+        exoPlayer.seekTo(clamped)
+        currentPos = clamped
+    }
 
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
@@ -584,13 +563,36 @@ private fun NativeExoPlayerBox(
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
+                isEnded = playbackState == Player.STATE_ENDED
                 if (playbackState == Player.STATE_READY) {
                     duration = exoPlayer.duration.coerceAtLeast(0L)
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                onPlaybackError()
+                val causes = generateSequence<Throwable>(error) { it.cause }.toList()
+                val httpCode = causes
+                    .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+                    .firstOrNull()?.responseCode
+                val hasUnknownHost = causes.any { it is java.net.UnknownHostException }
+                val isTransientHttp = httpCode != null && httpCode in listOf(502, 503, 504)
+                val isTransientNetwork = !hasUnknownHost && (
+                    isTransientHttp ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                        error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+                    )
+                if (isTransientNetwork && !retriedTransient) {
+                    retriedTransient = true
+                    exoPlayer.prepare()
+                    exoPlayer.play()
+                    return
+                }
+                val causeChain = causes.joinToString(" | ") {
+                    "${it.javaClass.simpleName}: ${it.message.orEmpty()}"
+                }
+                val detail = "${error.errorCodeName} ${httpCode ?: ""} $causeChain"
+                onPlaybackError(detail)
             }
         }
         exoPlayer.addListener(listener)
@@ -615,7 +617,7 @@ private fun NativeExoPlayerBox(
         }
     }
 
-    // Auto-hide controls
+    // Auto-hide ExoPlayer controls (and Skip Opening/Ending inside it) after 3.5s
     LaunchedEffect(controlsVisible, isPlaying) {
         if (controlsVisible && isPlaying) {
             delay(3_500L)
@@ -623,19 +625,55 @@ private fun NativeExoPlayerBox(
         }
     }
 
+    // Auto-clear double-tap feedback badge
+    LaunchedEffect(doubleTapFeedback) {
+        if (doubleTapFeedback != null) {
+            delay(700L)
+            doubleTapFeedback = null
+        }
+    }
+
+    // Auto-next episode countdown when video ends
+    LaunchedEffect(isEnded, hasNextEpisode, autoNextCancelled) {
+        if (isEnded && hasNextEpisode && !autoNextCancelled) {
+            for (sec in 5 downTo 1) {
+                nextCountdownSec = sec
+                delay(1_000L)
+            }
+            onNextEpisode()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) { controlsVisible = !controlsVisible }
+            .pointerInput(exoPlayer, duration) {
+                detectTapGestures(
+                    onTap = { controlsVisible = !controlsVisible },
+                    onDoubleTap = { offset ->
+                        val isLeftHalf = offset.x < size.width / 2f
+                        if (isLeftHalf) {
+                            val target = (exoPlayer.currentPosition - 10_000L).coerceAtLeast(0L)
+                            exoPlayer.seekTo(target)
+                            currentPos = target
+                            doubleTapFeedback = "-10s"
+                        } else {
+                            val rawTarget = exoPlayer.currentPosition + 10_000L
+                            val target = if (duration > 0L) rawTarget.coerceAtMost(duration) else rawTarget
+                            exoPlayer.seekTo(target)
+                            currentPos = target
+                            doubleTapFeedback = "+10s"
+                        }
+                    }
+                )
+            }
     ) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = false
+                    this.resizeMode = resizeMode
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
@@ -646,6 +684,9 @@ private fun NativeExoPlayerBox(
                 if (view.player !== exoPlayer) {
                     view.player = exoPlayer
                 }
+                if (view.resizeMode != resizeMode) {
+                    view.resizeMode = resizeMode
+                }
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -655,6 +696,91 @@ private fun NativeExoPlayerBox(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.align(Alignment.Center)
             )
+        }
+
+        // Double-tap seek feedback badge
+        AnimatedVisibility(
+            visible = doubleTapFeedback != null,
+            enter = fadeIn() + scaleIn(initialScale = 0.85f),
+            exit = fadeOut() + scaleOut(targetScale = 0.9f),
+            modifier = Modifier
+                .align(
+                    if (doubleTapFeedback == "-10s") Alignment.CenterStart else Alignment.CenterEnd
+                )
+                .padding(horizontal = 36.dp)
+        ) {
+            Surface(
+                color = Color(0xCC0B0D14),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = if (doubleTapFeedback == "-10s") {
+                            Icons.Rounded.Replay10
+                        } else {
+                            Icons.Rounded.Forward10
+                        },
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = doubleTapFeedback.orEmpty(),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
+        // Auto-next episode countdown banner
+        AnimatedVisibility(
+            visible = isEnded && hasNextEpisode && !autoNextCancelled,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Surface(
+                color = Color(0xEA121622),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Siguiente episodio ($nextEpisodeNumber) en ${nextCountdownSec}s",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            onClick = { autoNextCancelled = true }
+                        ) {
+                            Text("Cancelar", color = Color.White.copy(alpha = 0.8f))
+                        }
+                        Button(
+                            onClick = onNextEpisode,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text("Reproducir ahora")
+                        }
+                    }
+                }
+            }
         }
 
         AnimatedVisibility(
@@ -669,7 +795,7 @@ private fun NativeExoPlayerBox(
                     .background(Color(0x78000000))
                     .padding(12.dp)
             ) {
-                // Top Bar
+                // Top Bar inside ExoPlayer controls
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -685,46 +811,111 @@ private fun NativeExoPlayerBox(
                         )
                     }
 
-                    Box {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Skip Opening / Ending integrated with ExoPlayer controls
                         Surface(
-                            color = Color(0x99000000),
-                            shape = RoundedCornerShape(8.dp),
+                            color = Color(0xCC14141C),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { speedMenuExpanded = true }
+                                .heightIn(min = 40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { performSkipOpEd() }
+                                .testTag("exo_skip_op_ed_button")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Speed,
-                                    contentDescription = "Velocidad",
-                                    tint = Color.White,
+                                    imageVector = Icons.Rounded.FastForward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(16.dp)
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "${playbackSpeed}x",
-                                    style = MaterialTheme.typography.labelLarge,
+                                    text = if (inEndingRange) {
+                                        stringResource(R.string.player_skip_ending)
+                                    } else {
+                                        stringResource(R.string.player_skip_opening)
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
                             }
                         }
 
-                        DropdownMenu(
-                            expanded = speedMenuExpanded,
-                            onDismissRequest = { speedMenuExpanded = false }
-                        ) {
-                            listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
-                                DropdownMenuItem(
-                                    text = { Text("${speed}x") },
-                                    onClick = {
-                                        playbackSpeed = speed
-                                        exoPlayer.setPlaybackSpeed(speed)
-                                        speedMenuExpanded = false
+                        // Video Resize / Aspect Mode Cycle
+                        Surface(
+                            color = Color(0x99000000),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    resizeMode = when (resizeMode) {
+                                        AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                                     }
-                                )
+                                }
+                                .testTag("exo_resize_mode")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AspectRatio,
+                                contentDescription = "Cambiar proporción de pantalla",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .size(18.dp)
+                            )
+                        }
+
+                        Box {
+                            Surface(
+                                color = Color(0x99000000),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { speedMenuExpanded = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Speed,
+                                        contentDescription = "Velocidad",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "${playbackSpeed}x",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = speedMenuExpanded,
+                                onDismissRequest = { speedMenuExpanded = false }
+                            ) {
+                                listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
+                                    DropdownMenuItem(
+                                        text = { Text("${speed}x") },
+                                        onClick = {
+                                            playbackSpeed = speed
+                                            exoPlayer.setPlaybackSpeed(speed)
+                                            speedMenuExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -838,174 +1029,6 @@ private fun NativeExoPlayerBox(
                             tint = Color.White
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun InAppWebPlayerBox(
-    embedUrl: String,
-    headers: Map<String, String>,
-    isFullscreen: Boolean,
-    onToggleFullscreen: () -> Unit,
-    onBack: () -> Unit,
-    onFirstLoad: () -> Unit
-) {
-    var customView by remember { mutableStateOf<View?>(null) }
-    var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
-    var rendererCrashed by remember { mutableStateOf(false) }
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
-
-    LaunchedEffect(embedUrl) {
-        rendererCrashed = false
-        onFirstLoad()
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            webViewRef?.let { wv ->
-                try {
-                    wv.webViewClient = WebViewClient()
-                    wv.stopLoading()
-                    wv.destroy()
-                } catch (_: Throwable) {
-                }
-            }
-            webViewRef = null
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (rendererCrashed) {
-            ErrorStateView(
-                message = "El reproductor web se detuvo inesperadamente. Puedes reintentar o elegir otro servidor.",
-                onRetry = { rendererCrashed = false }
-            )
-        } else {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        webViewRef = this
-                        layoutParams = FrameLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            mediaPlaybackRequiresUserGesture = false
-                            setSupportMultipleWindows(false)
-                            javaScriptCanOpenWindowsAutomatically = false
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            userAgentString = JkAnimeHttpClient.USER_AGENT
-                        }
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
-                                customView = view
-                                customViewCallback = callback
-                                if (!isFullscreen) onToggleFullscreen()
-                            }
-
-                            override fun onHideCustomView() {
-                                customView = null
-                                customViewCallback?.onCustomViewHidden()
-                                customViewCallback = null
-                            }
-                        }
-                        webViewClient = object : WebViewClient() {
-                            override fun onRenderProcessGone(
-                                view: WebView?,
-                                detail: RenderProcessGoneDetail?
-                            ): Boolean {
-                                webViewRef = null
-                                rendererCrashed = true
-                                return true
-                            }
-
-                            override fun shouldInterceptRequest(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): WebResourceResponse? {
-                                val url = request?.url?.toString().orEmpty()
-                                if (VideoStreamResolver.isAdOrTrackerUrl(url)) {
-                                    return WebResourceResponse(
-                                        "text/plain",
-                                        "utf-8",
-                                        ByteArrayInputStream(ByteArray(0))
-                                    )
-                                }
-                                return super.shouldInterceptRequest(view, request)
-                            }
-
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): Boolean {
-                                val url = request?.url?.toString().orEmpty()
-                                if (VideoStreamResolver.isAdOrTrackerUrl(url)) return true
-                                return false
-                            }
-                        }
-                        loadUrl(embedUrl, headers)
-                    }
-                },
-                update = { webView ->
-                    if (webView.url != embedUrl) {
-                        webView.loadUrl(embedUrl, headers)
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-
-        // Custom fullscreen container if HTML5 video enters fullscreen
-        customView?.let { fsView ->
-            AndroidView(
-                factory = { fsView },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-            )
-        }
-
-        // Overlay Back & Fullscreen controls in corner
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            if (isFullscreen) {
-                Surface(
-                    color = Color(0x99000000),
-                    shape = CircleShape
-                ) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.cd_back),
-                            tint = Color.White
-                        )
-                    }
-                }
-            }
-            Surface(
-                color = Color(0x99000000),
-                shape = CircleShape
-            ) {
-                IconButton(
-                    onClick = onToggleFullscreen,
-                    modifier = Modifier.testTag("web_fullscreen_toggle")
-                ) {
-                    Icon(
-                        imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                        contentDescription = stringResource(R.string.cd_fullscreen),
-                        tint = Color.White
-                    )
                 }
             }
         }

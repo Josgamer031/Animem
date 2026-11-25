@@ -2,11 +2,14 @@ package com.example.data
 
 import com.example.model.AnimeDetail
 import com.example.model.AnimeProvider
+import com.example.model.AnimeSchedule
 import com.example.model.AnimeSummary
 import com.example.model.DirectoryPage
 import com.example.model.EpisodeItem
 import com.example.model.HomeFeed
 import com.example.model.LatestEpisode
+import com.example.model.ScheduleDay
+import com.example.model.ScheduleItem
 import com.example.model.VideoServer
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -376,6 +379,25 @@ object LatanimeParser {
         return servers
     }
 
+    fun parseHasNextEpisode(html: String, episodeUrl: String, episodeNumber: Int): Boolean? {
+        val doc = Jsoup.parse(html, episodeUrl)
+        val nextEp = episodeNumber + 1
+        val verLinks = doc.select("a[href*='/ver/']")
+        if (verLinks.isEmpty()) return null
+
+        val hasNextLink = verLinks.any { a ->
+            val href = normalizeUrl(a.attr("href")).substringBefore("?").substringBefore("#")
+            val text = a.text().trim().lowercase()
+            val epSlug = href.substringAfter("/ver/").trimEnd('/')
+            val num = extractEpisodeNumber(epSlug, text, fallback = -1)
+            num == nextEp || text.contains("siguiente") || text.contains("próximo") || text.contains("proximo")
+        }
+        if (hasNextLink) return true
+
+        val hasPrevOrListNav = doc.select("a:contains(Anterior), a:contains(Lista), a[href*='/anime/']").isNotEmpty()
+        return if (hasPrevOrListNav) false else null
+    }
+
     private fun parseAnimeSummaryCard(anchor: Element, card: Element): AnimeSummary? {
         val href = normalizeUrl(anchor.attr("href"))
         val slug = extractAnimeSlug(href) ?: return null
@@ -388,10 +410,14 @@ object LatanimeParser {
             ?: return null
 
         val coverUrl = extractImageUrl(card).ifBlank { extractImageUrl(anchor) }
-        val badgeText = card.select("span.badge, .tipo, .badge")
+        val badges = card.select("span.badge, .tipo, .badge, .estado, .status")
             .map { it.text().trim() }
-            .firstOrNull { it.isNotBlank() }
-            ?: "Latino"
+            .filter { it.isNotBlank() }
+        val badgeText = badges.firstOrNull() ?: "Latino"
+        val statusText = badges.firstOrNull {
+            val l = it.lowercase()
+            "emision" in l || "emisión" in l || "finalizado" in l || "estreno" in l
+        }.orEmpty()
 
         return AnimeSummary(
             slug = slug,
@@ -399,6 +425,7 @@ object LatanimeParser {
             url = "$BASE_URL/anime/$slug",
             coverUrl = coverUrl,
             type = badgeText,
+            status = statusText,
             provider = AnimeProvider.LATANIME
         )
     }
@@ -540,6 +567,114 @@ object LatanimeParser {
             "streamtape" in lower -> "StreamTape"
             else -> "Servidor"
         }
+    }
+
+    fun parseSchedule(html: String): AnimeSchedule {
+        val doc = Jsoup.parse(html, BASE_URL)
+        val dayDefs = listOf(
+            "lunes" to "Lunes",
+            "martes" to "Martes",
+            "miercoles" to "Miércoles",
+            "jueves" to "Jueves",
+            "viernes" to "Viernes",
+            "sabado" to "Sábado",
+            "domingo" to "Domingo"
+        )
+        val buckets = dayDefs.associate { it.first to mutableListOf<ScheduleItem>() }
+
+        fun normalizeDay(raw: String): String? {
+            val clean = raw.lowercase()
+                .replace("á", "a")
+                .replace("é", "e")
+                .replace("í", "i")
+                .replace("ó", "o")
+                .replace("ú", "u")
+                .trim()
+            return dayDefs.firstOrNull { (key, _) ->
+                Regex("""\b$key\b""").containsMatchIn(clean) || clean.startsWith(key)
+            }?.first
+        }
+
+        fun collectCards(container: Element, target: MutableList<ScheduleItem>) {
+            container.select("a[href*='/anime/']").forEach { anchor ->
+                val card = findCardContainer(anchor) ?: anchor
+                val summary = parseAnimeSummaryCard(anchor, card) ?: return@forEach
+                val timeText = card.selectFirst(".hora, .time, span.badge, time")
+                    ?.text()?.trim()?.takeIf { it.isNotBlank() }
+                    ?: Regex("""\b\d{1,2}:\d{2}\b""").find(card.text())?.value.orEmpty()
+                val idx = target.indexOfFirst { it.slug == summary.slug }
+                if (idx == -1) {
+                    target.add(
+                        ScheduleItem(
+                            slug = summary.slug,
+                            title = summary.title,
+                            url = summary.url,
+                            coverUrl = summary.coverUrl,
+                            releaseTime = timeText,
+                            episodeLabel = summary.type,
+                            provider = AnimeProvider.LATANIME
+                        )
+                    )
+                } else if (target[idx].coverUrl.isBlank() && summary.coverUrl.isNotBlank()) {
+                    target[idx] = target[idx].copy(coverUrl = summary.coverUrl)
+                }
+            }
+        }
+
+        // 1. Bootstrap tab links mapping #paneId -> weekday
+        val paneToDay = mutableMapOf<String, String>()
+        doc.select("a[href^=#], button[data-bs-target], [data-target]").forEach { tab ->
+            val dayKey = normalizeDay(tab.text()) ?: return@forEach
+            val targetSelector = tab.attr("href")
+                .ifBlank { tab.attr("data-bs-target") }
+                .ifBlank { tab.attr("data-target") }
+                .trimStart('#')
+            if (targetSelector.isNotBlank()) {
+                paneToDay[targetSelector] = dayKey
+            }
+        }
+        paneToDay.forEach { (paneId, dayKey) ->
+            val paneEl = doc.getElementById(paneId) ?: return@forEach
+            val target = buckets[dayKey] ?: return@forEach
+            collectCards(paneEl, target)
+        }
+
+        // 2. Sections/containers with weekday id, class, or heading
+        if (buckets.values.all { it.isEmpty() }) {
+            doc.select("div.tab-pane, section, div.card, div.container, div.row > div").forEach { container ->
+                val idOrClass = "${container.id()} ${container.className()}"
+                val heading = container.selectFirst("h1, h2, h3, h4, h5, .card-header, .title")?.text().orEmpty()
+                val dayKey = normalizeDay(idOrClass) ?: normalizeDay(heading) ?: return@forEach
+                val childDays = container.select("h2, h3, h4, h5").mapNotNull { normalizeDay(it.text()) }.distinct()
+                if (childDays.size > 1) return@forEach
+                buckets[dayKey]?.let { collectCards(container, it) }
+            }
+        }
+
+        // 3. Sibling heading -> grid pattern
+        if (buckets.values.all { it.isEmpty() }) {
+            doc.select("h2, h3, h4, h5").forEach { heading ->
+                val dayKey = normalizeDay(heading.text()) ?: return@forEach
+                val target = buckets[dayKey] ?: return@forEach
+                var sibling = heading.nextElementSibling()
+                while (sibling != null) {
+                    val siblingDay = if (sibling.tagName() in listOf("h2", "h3", "h4", "h5")) {
+                        normalizeDay(sibling.text())
+                    } else null
+                    if (siblingDay != null) break
+                    collectCards(sibling, target)
+                    if (sibling.select("a[href*='/anime/']").isNotEmpty()) break
+                    sibling = sibling.nextElementSibling()
+                }
+            }
+        }
+
+        return AnimeSchedule(
+            provider = AnimeProvider.LATANIME,
+            days = dayDefs.map { (key, label) ->
+                ScheduleDay(dayKey = key, dayLabel = label, items = buckets[key].orEmpty())
+            }
+        )
     }
 
     fun normalizeUrl(raw: String): String {

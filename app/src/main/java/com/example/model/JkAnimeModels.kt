@@ -99,12 +99,20 @@ data class VideoServer(
     val isInternalJkPlayer: Boolean = false
 )
 
+data class EpisodePlaybackInfo(
+    val servers: List<VideoServer>,
+    val hasNextEpisode: Boolean? = null,
+    val resolvedEpisodeUrl: String = ""
+)
+
 data class ResolvedVideo(
     val serverName: String,
     val streamUrl: String?,
     val embedUrl: String,
     val isDirectStream: Boolean,
-    val headers: Map<String, String> = emptyMap()
+    val headers: Map<String, String> = emptyMap(),
+    val usedWebSniff: Boolean = false,
+    val isHls: Boolean = false
 )
 
 data class DirectoryPage(
@@ -132,5 +140,51 @@ data class WatchHistoryEntry(
     val durationMs: Long = 0L,
     val updatedAtMillis: Long = System.currentTimeMillis(),
     val providerId: String = AnimeProvider.JKANIME.id,
-    val episodeUrl: String = ""
+    val episodeUrl: String = "",
+    val profileId: String = "default"
 )
+
+@Serializable
+data class UserProfile(
+    val id: String,
+    val name: String,
+    val avatarKey: String = "kitsune",
+    val preferredProviderId: String = AnimeProvider.JKANIME.id,
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
+data class ScheduleItem(
+    val slug: String,
+    val title: String,
+    val url: String,
+    val coverUrl: String = "",
+    val releaseTime: String = "",
+    val episodeLabel: String = "",
+    val provider: AnimeProvider = AnimeProvider.JKANIME
+)
+
+data class ScheduleDay(
+    val dayKey: String,
+    val dayLabel: String,
+    val items: List<ScheduleItem> = emptyList()
+)
+
+data class AnimeSchedule(
+    val provider: AnimeProvider,
+    val days: List<ScheduleDay> = emptyList()
+)
+
+@Serializable
+data class FavoriteAnime(
+    val animeSlug: String,
+    val animeTitle: String,
+    val coverUrl: String = "",
+    val type: String = "",
+    val status: String = "",
+    val totalEpisodesText: String = "",
+    val providerId: String = AnimeProvider.JKANIME.id,
+    val profileId: String = "default",
+    val addedAtMillis: Long = System.currentTimeMillis()
+)
+
+

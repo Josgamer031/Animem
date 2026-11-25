@@ -5,15 +5,18 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -44,6 +47,8 @@ class CloudflareWebBridge(
     private var rendererDisabled = false
     @Volatile
     private var userDismissedInteractive = false
+    @Volatile
+    private var activeSniffSignal: CompletableDeferred<Pair<String, Map<String, String>>>? = null
 
     private val _bridgeActive = MutableStateFlow(false)
     val bridgeActive: StateFlow<Boolean> = _bridgeActive.asStateFlow()
@@ -78,6 +83,7 @@ class CloudflareWebBridge(
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                 }
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
                 try {
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -90,7 +96,46 @@ class CloudflareWebBridge(
                     override fun shouldOverrideUrlLoading(
                         view: WebView?,
                         request: WebResourceRequest?
-                    ): Boolean = false
+                    ): Boolean {
+                        val reqUrl = request?.url?.toString().orEmpty()
+                        return activeSniffSignal != null && VideoStreamResolver.isAdOrTrackerUrl(reqUrl)
+                    }
+
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): WebResourceResponse? {
+                        val reqUrl = request?.url?.toString().orEmpty()
+                        val signal = activeSniffSignal
+                        if (signal != null && reqUrl.isNotBlank()) {
+                            if (VideoStreamResolver.isAdOrTrackerUrl(reqUrl)) {
+                                return WebResourceResponse(
+                                    "text/plain",
+                                    "utf-8",
+                                    ByteArrayInputStream(ByteArray(0))
+                                )
+                            }
+                            if (isCapturedPlayableMediaUrl(reqUrl)) {
+                                val capturedHeaders = mutableMapOf<String, String>()
+                                request?.requestHeaders?.forEach { (k, v) ->
+                                    if (!k.isNullOrBlank() && !v.isNullOrBlank() && (
+                                            k.equals("Referer", ignoreCase = true) ||
+                                                k.equals("Origin", ignoreCase = true) ||
+                                                k.equals("User-Agent", ignoreCase = true) ||
+                                                k.equals("Cookie", ignoreCase = true)
+                                            )
+                                    ) {
+                                        capturedHeaders[k] = v
+                                    }
+                                }
+                                if (!capturedHeaders.containsKey("User-Agent")) {
+                                    capturedHeaders["User-Agent"] = httpClient.activeUserAgent
+                                }
+                                signal.complete(reqUrl to capturedHeaders)
+                            }
+                        }
+                        return super.shouldInterceptRequest(view, request)
+                    }
 
                     override fun onRenderProcessGone(
                         view: WebView?,
@@ -101,6 +146,8 @@ class CloudflareWebBridge(
                         _needsInteractiveChallenge.value = false
                         _bridgeActive.value = false
                         webView = null
+                        activeSniffSignal?.cancel()
+                        activeSniffSignal = null
                         pendingJsFetches.values.forEach { it.complete(0 to "") }
                         pendingJsFetches.clear()
                         if (!webViewAttachedSignal.isCompleted) {
@@ -193,6 +240,145 @@ class CloudflareWebBridge(
         renderedHtml
     }
 
+    suspend fun sniffDirectMediaUrl(
+        embedUrl: String,
+        referer: String,
+        timeoutMs: Long = 11_000L
+    ): Pair<String, Map<String, String>>? = mutex.withLock {
+        if (rendererDisabled || embedUrl.isBlank()) return@withLock null
+        val wv = ensureWebViewAttached() ?: return@withLock null
+
+        val signal = CompletableDeferred<Pair<String, Map<String, String>>>()
+        activeSniffSignal = signal
+        hasVerifiedOrigin = false
+
+        try {
+            withContext(Dispatchers.Main) {
+                try {
+                    wv.onResume()
+                    val headers = if (referer.isNotBlank()) mapOf("Referer" to referer) else emptyMap()
+                    wv.loadUrl(embedUrl, headers)
+                } catch (_: Throwable) {
+                }
+            }
+
+            val startMs = System.currentTimeMillis()
+            while (System.currentTimeMillis() - startMs < timeoutMs) {
+                if (signal.isCompleted) break
+                if (rendererDisabled) return@withLock null
+                delay(450L)
+                if (signal.isCompleted) break
+
+                // Trigger player start & inspect DOM video / jwplayer sources
+                val jsCandidate = probePlayerDomForMedia(wv)
+                if (!jsCandidate.isNullOrBlank() && isCapturedPlayableMediaUrl(jsCandidate)) {
+                    val mediaHeaders = httpClient.buildMediaHeaders(embedUrl)
+                    signal.complete(JsUnpacker.normalizeStreamUrl(jsCandidate) to mediaHeaders)
+                    break
+                }
+            }
+
+            val captured = if (signal.isCompleted) signal.await() else null
+            if (captured != null) {
+                syncCookiesAndUa(wv, captured.first)
+            }
+            captured
+        } finally {
+            activeSniffSignal = null
+            withContext(Dispatchers.Main) {
+                try {
+                    wv.loadUrl("about:blank")
+                    wv.onPause()
+                } catch (_: Throwable) {
+                }
+            }
+        }
+    }
+
+    private suspend fun probePlayerDomForMedia(wv: WebView): String? =
+        withTimeoutOrNull(1_200L) {
+            withContext(Dispatchers.Main) {
+                val d = CompletableDeferred<String?>()
+                val probeJs = """
+                    (function(){
+                      function scanDoc(doc) {
+                        if (!doc) return '';
+                        try {
+                          var vids = doc.querySelectorAll('video, video source');
+                          for (var i = 0; i < vids.length; i++) {
+                            var s = vids[i].currentSrc || vids[i].src || '';
+                            if (s && s.indexOf('http') === 0 && s.indexOf('blob:') !== 0) return s;
+                          }
+                          var frames = doc.querySelectorAll('iframe');
+                          for (var f = 0; f < frames.length; f++) {
+                            try {
+                              var inner = scanDoc(frames[f].contentDocument);
+                              if (inner) return inner;
+                            } catch(e){}
+                          }
+                          var btns = doc.querySelectorAll('.jw-icon-display, .vjs-big-play-button, .plyr__control--overlaid, #play, .play-btn, button[aria-label*="Play"], video');
+                          for (var j = 0; j < Math.min(btns.length, 3); j++) {
+                            try { btns[j].click(); } catch(e){}
+                          }
+                        } catch(e){}
+                        return '';
+                      }
+                      try {
+                        var direct = scanDoc(document);
+                        if (direct) return direct;
+                        if (typeof jwplayer === 'function') {
+                          try {
+                            var pl = jwplayer().getPlaylist();
+                            if (pl && pl[0]) {
+                              if (pl[0].file && pl[0].file.indexOf('http') === 0) return pl[0].file;
+                              if (pl[0].sources && pl[0].sources[0] && pl[0].sources[0].file) return pl[0].sources[0].file;
+                            }
+                          } catch(e){}
+                        }
+                        if (window.performance && performance.getEntriesByType) {
+                          var entries = performance.getEntriesByType('resource');
+                          for (var k = entries.length - 1; k >= 0; k--) {
+                            var u = entries[k].name || '';
+                            var lu = u.toLowerCase();
+                            if (u.indexOf('http') === 0 && (lu.indexOf('.m3u8') !== -1 || lu.indexOf('.mp4') !== -1 || lu.indexOf('master.txt') !== -1 || lu.indexOf('okcdn.ru') !== -1 || lu.indexOf('get_video?') !== -1)) {
+                              return u;
+                            }
+                          }
+                        }
+                      } catch(e){}
+                      return '';
+                    })();
+                """.trimIndent()
+                try {
+                    wv.evaluateJavascript(probeJs) { raw ->
+                        val cleaned = unescapeJsHtml(raw).trim()
+                        d.complete(cleaned.takeIf { it.isNotBlank() })
+                    }
+                } catch (_: Throwable) {
+                    d.complete(null)
+                }
+                d.await()
+            }
+        }
+
+    private fun isCapturedPlayableMediaUrl(url: String): Boolean {
+        if (!JsUnpacker.isValidPlayableHttpUrl(url)) return false
+        val lower = url.lowercase()
+        val path = lower.substringBefore("?")
+        if (path.endsWith(".ts") || path.endsWith(".m4s") || path.endsWith(".json")) return false
+        return path.endsWith(".m3u8") ||
+            path.endsWith(".mp4") ||
+            path.endsWith(".mpd") ||
+            lower.contains(".m3u8?") ||
+            lower.contains(".mp4?") ||
+            lower.contains("master.txt") ||
+            lower.contains("index.m3u8") ||
+            lower.contains("playlist.m3u8") ||
+            lower.contains("videoplayback") ||
+            lower.contains("get_video?") ||
+            lower.contains("okcdn.ru")
+    }
+
     private suspend fun ensureWebViewAttached(): WebView? {
         if (webView == null) {
             if (webViewAttachedSignal.isCompleted) {
@@ -262,6 +448,7 @@ class CloudflareWebBridge(
 
         withContext(Dispatchers.Main) {
             try {
+                wv.onResume()
                 val headers = if (referer.isNotBlank()) mapOf("Referer" to referer) else emptyMap()
                 wv.loadUrl(url, headers)
             } catch (_: Throwable) {

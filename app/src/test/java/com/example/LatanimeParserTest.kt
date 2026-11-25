@@ -119,4 +119,78 @@ class LatanimeParserTest {
         assertEquals("StreamWish", servers.first().name)
         assertEquals("https://sfastwish.com/e/lat123", servers.first().decodedEmbedUrl)
     }
+
+    @Test
+    fun parseHasNextEpisode_detectsNextAndFinalEpisodes() {
+        val middleHtml = """
+            <html><body>
+              <a href="https://latanime.org/ver/solo-leveling-latino-episodio-9">Anterior</a>
+              <a href="https://latanime.org/ver/solo-leveling-latino-episodio-11">Siguiente</a>
+            </body></html>
+        """.trimIndent()
+        assertEquals(
+            true,
+            LatanimeParser.parseHasNextEpisode(
+                middleHtml,
+                "https://latanime.org/ver/solo-leveling-latino-episodio-10",
+                10
+            )
+        )
+
+        val finalHtml = """
+            <html><body>
+              <a href="https://latanime.org/ver/solo-leveling-latino-episodio-11">Anterior</a>
+              <a href="https://latanime.org/anime/solo-leveling-latino">Lista</a>
+            </body></html>
+        """.trimIndent()
+        assertEquals(
+            false,
+            LatanimeParser.parseHasNextEpisode(
+                finalHtml,
+                "https://latanime.org/ver/solo-leveling-latino-episodio-12",
+                12
+            )
+        )
+    }
+
+    @Test
+    fun parseSchedule_extractsWeekdayTabsForLatanime() {
+        val html = """
+            <html><body>
+              <ul class="nav nav-tabs">
+                <li class="nav-item"><a class="nav-link" href="#tab-martes">Martes</a></li>
+                <li class="nav-item"><a class="nav-link" href="#tab-viernes">Viernes</a></li>
+              </ul>
+              <div class="tab-content">
+                <div id="tab-martes" class="tab-pane">
+                  <div class="col-6">
+                    <a href="https://latanime.org/anime/danmachi-latino">
+                      <img data-src="https://latanime.org/storage/danmachi.jpg" />
+                      <h3 class="serietitle">DanMachi Latino</h3>
+                      <span class="badge">16:00</span>
+                    </a>
+                  </div>
+                </div>
+                <div id="tab-viernes" class="tab-pane">
+                  <div class="col-6">
+                    <a href="https://latanime.org/anime/dandadan-latino">
+                      <img src="https://latanime.org/storage/dandadan.jpg" />
+                      <h3 class="serietitle">Dandadan Latino</h3>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </body></html>
+        """.trimIndent()
+
+        val schedule = LatanimeParser.parseSchedule(html)
+        assertEquals(7, schedule.days.size)
+        val tuesday = schedule.days.first { it.dayKey == "martes" }
+        val friday = schedule.days.first { it.dayKey == "viernes" }
+        assertEquals(1, tuesday.items.size)
+        assertEquals("danmachi-latino", tuesday.items.first().slug)
+        assertEquals("16:00", tuesday.items.first().releaseTime)
+        assertEquals(1, friday.items.size)
+        assertEquals("dandadan-latino", friday.items.first().slug)
+    }
 }

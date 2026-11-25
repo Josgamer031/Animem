@@ -241,4 +241,336 @@ class JkAnimeParserTest {
             feed.recentAdded[1].coverUrl
         )
     }
+
+    @Test
+    fun parseDirectoryOrSearch_handlesRawJsonAndFallbackWithoutCover() {
+        val rawJson = """
+            {"current_page":1,"last_page":2,"data":[
+              {"slug":"naruto","title":"Naruto","image":"/assets/naruto.jpg","type":"Anime"},
+              {"slug":"naruto-shippuden","title":"Naruto Shippuden"}
+            ]}
+        """.trimIndent()
+        val jsonPage = JkAnimeParser.parseDirectoryOrSearch(rawJson, 1)
+        assertEquals(2, jsonPage.items.size)
+        assertEquals("naruto", jsonPage.items[0].slug)
+        assertTrue(jsonPage.hasNextPage)
+
+        val fallbackHtml = """
+            <html><body>
+              <div class="row">
+                <div class="col-lg-12">
+                  <div class="search-item"><a href="https://jkanime.net/one-piece/">One Piece</a></div>
+                  <div class="search-item"><a href="https://jkanime.net/bleach/">Bleach</a></div>
+                </div>
+              </div>
+            </body></html>
+        """.trimIndent()
+        val htmlPage = JkAnimeParser.parseDirectoryOrSearch(fallbackHtml, 1)
+        assertEquals(2, htmlPage.items.size)
+        assertEquals(listOf("one-piece", "bleach"), htmlPage.items.map { it.slug })
+    }
+
+    @Test
+    fun parseHasNextEpisode_detectsLastVsMiddleEpisode() {
+        val middleHtml = """
+            <html><body>
+              <div class="ep-nav">
+                <a href="https://jkanime.net/frieren/11/">Episodio Anterior</a>
+                <a href="https://jkanime.net/frieren/">Listado</a>
+                <a href="https://jkanime.net/frieren/13/">Siguiente Episodio</a>
+              </div>
+            </body></html>
+        """.trimIndent()
+        assertEquals(true, JkAnimeParser.parseHasNextEpisode(middleHtml, "frieren", 12))
+
+        val lastHtml = """
+            <html><body>
+              <div class="ep-nav">
+                <a href="https://jkanime.net/frieren/27/">Episodio Anterior</a>
+                <a href="https://jkanime.net/frieren/">Listado de Episodios</a>
+              </div>
+            </body></html>
+        """.trimIndent()
+        assertEquals(false, JkAnimeParser.parseHasNextEpisode(lastHtml, "frieren", 28))
+    }
+
+    @Test
+    fun jsUnpacker_validatesUrlsAndDecodesAtob() {
+        val b64 = java.util.Base64.getEncoder()
+            .encodeToString("https://cdn.myvideo.net/stream/master.m3u8".toByteArray())
+        val script = """<script>var src = atob("$b64"); var bad = "https://example.com/fake.m3u8";</script>"""
+        val urls = JsUnpacker.extractDirectMediaUrls(script)
+        assertTrue(urls.contains("https://cdn.myvideo.net/stream/master.m3u8"))
+        assertTrue(urls.none { it.contains("example.com") })
+        assertEquals("https://cdn.host.tv/v.mp4", JsUnpacker.normalizeStreamUrl("//cdn.host.tv/v.mp4"))
+
+        val hexEscaped = """<script>var hls = "https:\x2f\x2fcdn.host.tv\x2fv\x2fmaster.m3u8\u003ftoken\u003d123\u0026exp\u003d9";</script>"""
+        val hexUrls = JsUnpacker.extractDirectMediaUrls(hexEscaped)
+        assertTrue(hexUrls.contains("https://cdn.host.tv/v/master.m3u8?token=123&exp=9"))
+    }
+
+    @Test
+    fun parseSchedule_extractsWeekdayBucketsAndTimes() {
+        val scheduleHtml = """
+            <html><body>
+              <div class="semana">
+                <h3>Lunes</h3>
+                <div class="box">
+                  <a href="https://jkanime.net/solo-leveling/">
+                    <img src="https://cdn.jkanime.net/solo.jpg" />
+                    <h5>Solo Leveling</h5>
+                  </a>
+                  <span class="hora">14:30</span>
+                </div>
+              </div>
+              <div class="semana">
+                <h3>Sábado</h3>
+                <div class="box">
+                  <a href="https://jkanime.net/one-piece/">
+                    <img data-src="https://cdn.jkanime.net/op.jpg" />
+                    <h5>One Piece</h5>
+                  </a>
+                  <span class="hora">21:00</span>
+                </div>
+              </div>
+            </body></html>
+        """.trimIndent()
+
+        val schedule = JkAnimeParser.parseSchedule(scheduleHtml)
+        assertEquals(7, schedule.days.size)
+        val monday = schedule.days.first { it.dayKey == "lunes" }
+        val saturday = schedule.days.first { it.dayKey == "sabado" }
+        assertEquals(1, monday.items.size)
+        assertEquals("solo-leveling", monday.items.first().slug)
+        assertEquals("14:30", monday.items.first().releaseTime)
+        assertEquals(1, saturday.items.size)
+        assertEquals("one-piece", saturday.items.first().slug)
+        assertEquals("21:00", saturday.items.first().releaseTime)
+    }
+
+    @Test
+    fun webAdBlocker_blocksAdUrlsAndUntrustedRedirects() {
+        assertTrue(com.example.data.VideoStreamResolver.isAdOrTrackerUrl("https://cdn.adsterra.com/popunder.js"))
+        assertTrue(com.example.data.VideoStreamResolver.isAdOrTrackerUrl("https://exosrv.com/click?id=12"))
+        assertTrue(com.example.data.VideoStreamResolver.isAdOrTrackerUrl("intent://open.ad.app/#Intent;end"))
+        assertTrue(!com.example.data.VideoStreamResolver.isAdOrTrackerUrl("https://sfastwish.com/e/abc123"))
+
+        assertTrue(
+            com.example.data.VideoStreamResolver.isTrustedEmbedNavigation(
+                "https://sfastwish.com/e/abc123?autoplay=1",
+                "https://sfastwish.com/e/abc123"
+            )
+        )
+        assertTrue(
+            !com.example.data.VideoStreamResolver.isTrustedEmbedNavigation(
+                "https://random-casino-redirect.xyz/win",
+                "https://sfastwish.com/e/abc123"
+            )
+        )
+    }
+
+    @Test
+    fun watchHistoryEntry_deserializesLegacyJsonWithDefaultProfileId() {
+        val legacyJson = """{"animeSlug":"frieren","animeTitle":"Frieren","coverUrl":"https://cdn/f.jpg","episodeNumber":3,"positionMs":12000,"durationMs":1400000,"updatedAtMillis":1000,"providerId":"latanime"}"""
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val parsed = json.decodeFromString<com.example.model.WatchHistoryEntry>(legacyJson)
+        assertEquals("default", parsed.profileId)
+        assertEquals("latanime", parsed.providerId)
+        assertEquals(3, parsed.episodeNumber)
+    }
+
+    @Test
+    fun parseHome_extractsSiblingHeadingGridsForAiringAndRecent() {
+        val siblingLayoutHtml = """
+            <html><body>
+              <div class="container">
+                <div class="section-title"><h4>Programación en Emisión</h4></div>
+                <div class="row">
+                  <div class="col-6">
+                    <a href="https://jkanime.net/solo-leveling-arise/">
+                      <img src="https://cdn.jkdesu.com/solo.jpg">
+                      <h5>Solo Leveling</h5>
+                    </a>
+                  </div>
+                </div>
+                <div class="section-title"><h4>Animes Agregados Recientemente</h4></div>
+                <div class="row">
+                  <div class="col-6">
+                    <a href="https://jkanime.net/apothecary-diaries-2/">
+                      <img src="https://cdn.jkdesu.com/maomao.jpg">
+                      <h5>Kusuriya no Hitorigoto 2</h5>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </body></html>
+        """.trimIndent()
+
+        val feed = JkAnimeParser.parseHome(siblingLayoutHtml)
+        assertEquals(listOf("solo-leveling-arise"), feed.airing.map { it.slug })
+        assertEquals(listOf("apothecary-diaries-2"), feed.recentAdded.map { it.slug })
+    }
+
+    @Test
+    fun parseHome_extractsEmbeddedScriptArraysForAiringAndRecent() {
+        val scriptHomeHtml = """
+            <html><body>
+              <div id="app"></div>
+              <script>
+                var emision = [
+                  {"slug":"one-piece","title":"One Piece","image":"onepiece.jpg","type":"Anime"}
+                ];
+                var recientes = [
+                  {"slug":"lazarus","title":"Lazarus","image":"lazarus.jpg","type":"Anime"}
+                ];
+              </script>
+            </body></html>
+        """.trimIndent()
+
+        val feed = JkAnimeParser.parseHome(scriptHomeHtml)
+        assertEquals(listOf("one-piece"), feed.airing.map { it.slug })
+        assertEquals(listOf("lazarus"), feed.recentAdded.map { it.slug })
+    }
+
+    @Test
+    fun parseDirectoryFilterOptions_andBadgeSeparationWorkCorrectly() {
+        val filterHtml = """
+            <html><body>
+              <form action="/directorio/" method="get">
+                <select name="estado">
+                  <option value="">Todos</option>
+                  <option value="1">En Emisión</option>
+                  <option value="2">Finalizado</option>
+                </select>
+                <select name="tipo">
+                  <option value="">Todos</option>
+                  <option value="Movie">Película</option>
+                  <option value="OVA">OVA</option>
+                </select>
+                <select name="genero">
+                  <option value="ciencia-ficcion">Ciencia Ficción</option>
+                </select>
+              </form>
+              <a href="https://jkanime.net/genero/accion/">Acción</a>
+              <div class="custom_item2">
+                <a href="https://jkanime.net/suzume/">
+                  <img src="https://cdn.jkdesu.com/suzume.jpg">
+                </a>
+                <h5>Suzume no Tojimari</h5>
+                <ul>
+                  <li class="ep">1 Ep</li>
+                  <li class="type">Pelicula</li>
+                  <li class="status">Finalizado</li>
+                </ul>
+              </div>
+            </body></html>
+        """.trimIndent()
+
+        val opts = JkAnimeParser.parseDirectoryFilterOptions(filterHtml)
+        assertEquals("1", opts.statusOptions["emision"])
+        assertEquals("2", opts.statusOptions["finalizado"])
+        assertEquals("Movie", opts.typeOptions["peliculas"])
+        assertEquals("https://jkanime.net/genero/accion/", opts.genreLinks["accion"])
+
+        val page = JkAnimeParser.parseDirectoryOrSearch(filterHtml, 1)
+        assertEquals(1, page.items.size)
+        val item = page.items.first()
+        assertEquals("suzume", item.slug)
+        assertEquals("Pelicula", item.type)
+        assertEquals("Finalizado", item.status)
+        assertEquals("1 Ep", item.episodeBadge)
+    }
+
+    @Test
+    fun parseHome_doesNotPullPopularProductIntoRecentAdded() {
+        val html = """
+            <html><body>
+              <div class="popular__product">
+                <div class="section-title"><h4>Populares de siempre</h4></div>
+                <div class="anime__item">
+                  <a href="https://jkanime.net/naruto-classic/">
+                    <div class="anime__item__pic" data-setbg="https://cdn.jkdesu.com/naruto.jpg"></div>
+                  </a>
+                  <div class="anime__item__text"><h5>Naruto</h5></div>
+                </div>
+              </div>
+              <div class="last_animes">
+                <a href="https://jkanime.net/witch-watch/">
+                  <img src="https://cdn.jkdesu.com/witch.jpg">
+                  <h5>Witch Watch</h5>
+                </a>
+              </div>
+            </body></html>
+        """.trimIndent()
+
+        val feed = JkAnimeParser.parseHome(html)
+        assertEquals(listOf("witch-watch"), feed.recentAdded.map { it.slug })
+    }
+
+    @Test
+    fun parseAnimeDetail_ignoresNonNumericDataIdAndExtractsEpisodePageOnclickAndEmbeddedJson() {
+        val html = """
+            <html><body>
+              <div class="like-btn" data-id="bookmark-heart"></div>
+              <div class="anime__details__pic" data-setbg="https://cdn.jkdesu.com/kaiju.jpg" data-anime-id="5592"></div>
+              <div class="anime__details__title"><h3>Kaiju No. 8</h3></div>
+              <div id="episode_page">
+                <a href="#p1" onclick="pagination('5592', 1)">1 - 12</a>
+                <a href="#p2" onclick="pagination('5592', 2)">13 - 24</a>
+              </div>
+              <script>
+                var episodios = [
+                  {"number": 1, "title": "Episodio 1", "image": "/assets/ep1.jpg"},
+                  {"number": 2, "title": "Episodio 2", "image": "/assets/ep2.jpg"}
+                ];
+              </script>
+            </body></html>
+        """.trimIndent()
+
+        val detail = JkAnimeParser.parseAnimeDetail("kaiju-no-8", html)
+        assertEquals("5592", detail.animeId)
+        assertEquals(2, detail.pageRanges.size)
+        assertEquals(listOf(1, 2), detail.episodes.map { it.number })
+    }
+
+    @Test
+    fun parseDirectoryOrSearch_excludesSidebarRecommendationsFromEmptySearch() {
+        val html = """
+            <html><body>
+              <div class="anime__page__content">
+                <p>No se encontraron resultados.</p>
+              </div>
+              <aside class="anime__sidebar__view">
+                <div class="anime__item">
+                  <a href="https://jkanime.net/sidebar-promo/">
+                    <div class="anime__item__pic" data-setbg="https://cdn.jkdesu.com/promo.jpg"></div>
+                  </a>
+                  <div class="anime__item__text"><h5>Sidebar Promo</h5></div>
+                </div>
+              </aside>
+            </body></html>
+        """.trimIndent()
+
+        val page = JkAnimeParser.parseDirectoryOrSearch(html, 1)
+        assertTrue(page.items.isEmpty())
+    }
+
+    @Test
+    fun favoriteAnime_serializesAndDeserializesCorrectly() {
+        val fav = com.example.model.FavoriteAnime(
+            animeSlug = "solo-leveling",
+            animeTitle = "Solo Leveling",
+            coverUrl = "https://cdn.jkdesu.com/solo.jpg",
+            type = "Anime",
+            status = "En emisión",
+            totalEpisodesText = "12",
+            providerId = "jkanime",
+            profileId = "default",
+            addedAtMillis = 123456789L
+        )
+        val json = kotlinx.serialization.json.Json
+        val encoded = json.encodeToString(com.example.model.FavoriteAnime.serializer(), fav)
+        val decoded = json.decodeFromString(com.example.model.FavoriteAnime.serializer(), encoded)
+        assertEquals(fav, decoded)
+    }
 }

@@ -22,6 +22,8 @@ class JkAnimeViewModelFactory(
                 HomeViewModel(repository) as T
             modelClass.isAssignableFrom(ExploreViewModel::class.java) ->
                 ExploreViewModel(repository) as T
+            modelClass.isAssignableFrom(ScheduleViewModel::class.java) ->
+                ScheduleViewModel(repository) as T
             modelClass.isAssignableFrom(HistoryViewModel::class.java) ->
                 HistoryViewModel(repository) as T
             modelClass.isAssignableFrom(AnimeDetailViewModel::class.java) ->

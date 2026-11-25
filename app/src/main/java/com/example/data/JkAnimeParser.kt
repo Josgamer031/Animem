@@ -1,12 +1,16 @@
 package com.example.data
 
 import com.example.model.AnimeDetail
+import com.example.model.AnimeProvider
+import com.example.model.AnimeSchedule
 import com.example.model.AnimeSummary
 import com.example.model.DirectoryPage
 import com.example.model.EpisodeItem
 import com.example.model.EpisodePageRange
 import com.example.model.HomeFeed
 import com.example.model.LatestEpisode
+import com.example.model.ScheduleDay
+import com.example.model.ScheduleItem
 import com.example.model.VideoServer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -24,8 +28,10 @@ object JkAnimeParser {
     private val NON_ANIME_SLUGS = setOf(
         "directorio", "buscar", "horario", "top", "genero", "letra",
         "estrenos", "peliculas", "ovas", "onas", "especiales", "anime",
-        "login", "registro", "perfil", "historia", "terminos", "privacidad",
-        "dmca", "contacto", "user", "ajax", "cdn-cgi"
+        "animes", "emision", "finalizado", "finalizados", "calendario",
+        "noticias", "favoritos", "mi-lista", "login", "registro", "perfil",
+        "historia", "terminos", "terminos-y-condiciones", "privacidad",
+        "politica-de-privacidad", "dmca", "contacto", "user", "ajax", "cdn-cgi"
     )
 
     fun parseHome(html: String): HomeFeed {
@@ -154,62 +160,158 @@ object JkAnimeParser {
             }
         }
 
-        // 3. Airing vs Recent Added: classify distinctly by section heading and container
+        // 3. Airing vs Recent Added: classify distinctly by heading, sibling grid, sidebar, and scripts
         val airing = mutableListOf<AnimeSummary>()
         val recentAdded = mutableListOf<AnimeSummary>()
 
+        fun normalizeHeading(raw: String): String =
+            raw.lowercase()
+                .replace("á", "a")
+                .replace("é", "e")
+                .replace("í", "i")
+                .replace("ó", "o")
+                .replace("ú", "u")
+                .trim()
+
+        fun classifySectionKey(norm: String): String? = when {
+            norm.length > 80 -> null
+            norm.contains("emision") ||
+                norm.contains("programacion") ||
+                norm.contains("en curso") ||
+                norm.contains("transmision") -> "airing"
+            norm.contains("agregad") ||
+                norm.contains("recient") ||
+                norm.contains("ultimos animes") ||
+                (norm.contains("ultim") && !norm.contains("episod") && !norm.contains("capitul")) ||
+                norm.contains("nuevos") ||
+                norm.contains("estreno") -> "recent"
+            else -> null
+        }
+
+        fun targetListForKey(key: String?): MutableList<AnimeSummary>? = when (key) {
+            "airing" -> airing
+            "recent" -> recentAdded
+            else -> null
+        }
+
+        fun addSummaryToTarget(el: Element, targetList: MutableList<AnimeSummary>) {
+            parseAnimeSummaryElement(el)?.let { item ->
+                val existingIdx = targetList.indexOfFirst { it.slug == item.slug }
+                if (existingIdx == -1) {
+                    targetList.add(item)
+                } else if (targetList[existingIdx].coverUrl.isBlank() && item.coverUrl.isNotBlank()) {
+                    targetList[existingIdx] = targetList[existingIdx].copy(coverUrl = item.coverUrl)
+                }
+            }
+        }
+
+        // 3A. Heading-anchored scan (handles section wrappers AND sibling heading -> .row layouts)
+        doc.select("h1, h2, h3, h4, h5, .section-title, .card-header").forEach { headingEl ->
+            val norm = normalizeHeading(headingEl.text())
+            val sectionKey = classifySectionKey(norm)
+            val targetList = targetListForKey(sectionKey) ?: return@forEach
+
+            // Try dedicated enclosing container that owns only this heading
+            val enclosing = generateSequence(headingEl.parent()) { it.parent() }
+                .take(2)
+                .firstOrNull { parent ->
+                    val distinctSectionTypes = parent.select("h1, h2, h3, h4, h5, .section-title, .card-header")
+                        .mapNotNull { classifySectionKey(normalizeHeading(it.text())) }
+                        .distinct()
+                    distinctSectionTypes.size <= 1 &&
+                        parent.select("div.anime__item, div.product__item, div.card, div.anime__sidebar__comment__item, li, a[href]")
+                            .any { extractSlugFromAnimeUrl(normalizeUrl(if (it.tagName() == "a") it.attr("href") else it.selectFirst("a[href]")?.attr("href").orEmpty())) != null }
+                }
+
+            if (enclosing != null) {
+                enclosing.select("div.anime__item, div.product__item, div.card, div.anime__sidebar__comment__item, div.product__sidebar__comment__item, div.anime__sidebar__view__item, li, a[href]")
+                    .forEach { addSummaryToTarget(it, targetList) }
+            }
+
+            // Also scan sibling container right after heading (or its .section-title/.col wrapper)
+            val blockRoot = if (headingEl.parent()?.hasClass("section-title") == true ||
+                headingEl.parent()?.className()?.contains("col-") == true
+            ) {
+                headingEl.parent() ?: headingEl
+            } else {
+                headingEl
+            }
+            var sibling = blockRoot.nextElementSibling()
+            var steps = 0
+            while (sibling != null && steps < 3) {
+                if (sibling.select("h1, h2, h3, h4, h5, .section-title, .card-header")
+                        .any { classifySectionKey(normalizeHeading(it.text())) != null }
+                ) {
+                    break
+                }
+                val beforeSize = targetList.size
+                sibling.select("div.anime__item, div.product__item, div.card, div.anime__sidebar__comment__item, li, a[href]")
+                    .forEach { addSummaryToTarget(it, targetList) }
+                if (targetList.size > beforeSize) break
+                sibling = sibling.nextElementSibling()
+                steps++
+            }
+        }
+
+        // 3B. Explicit container-class fallback (classic & updated JKAnime themes)
         val sectionContainers = doc.select(
             "section, div.trending__product, div.recent__product, div.popular__product, " +
-                "div.anime__sidebar__comment, div.product__sidebar__comment, div.anime__sidebar__view, " +
+                "div.last_animes, div.latest__animes, div.anime__sidebar__comment, " +
+                "div.product__sidebar__comment, div.anime__sidebar__view, " +
                 "div.side-box, div.col-lg-4 > div, div.col-lg-8 > div"
         )
         sectionContainers.forEach { container ->
-            val heading = container.selectFirst("h2, h3, h4, h5, .section-title, .card-header")
-                ?.text()?.trim()?.lowercase().orEmpty()
-            val targetList = when {
-                heading.contains("emisión") || heading.contains("emision") ||
-                    heading.contains("programación") || heading.contains("programacion") ||
-                    heading.contains("en curso") -> airing
-                heading.contains("agregad") || heading.contains("recient") ||
-                    heading.contains("últimos animes") || heading.contains("ultimos animes") ||
-                    heading.contains("nuevos") || heading.contains("estreno") -> recentAdded
-                else -> null
-            } ?: return@forEach
-
-                container.select("div.anime__item, div.product__item, div.card, div.anime__sidebar__comment__item, div.product__sidebar__comment__item, li, a[href]")
-                    .forEach { el ->
-                        parseAnimeSummaryElement(el)?.let { item ->
-                            val existingIdx = targetList.indexOfFirst { it.slug == item.slug }
-                            if (existingIdx == -1) {
-                                targetList.add(item)
-                            } else if (targetList[existingIdx].coverUrl.isBlank() && item.coverUrl.isNotBlank()) {
-                                targetList[existingIdx] = targetList[existingIdx].copy(coverUrl = item.coverUrl)
-                            }
-                        }
-                    }
+            val heading = container.selectFirst("h1, h2, h3, h4, h5, .section-title, .card-header")
+                ?.text()?.let(::normalizeHeading).orEmpty()
+            val targetList = targetListForKey(classifySectionKey(heading)) ?: return@forEach
+            val distinctChildSections = container.select("h1, h2, h3, h4, h5, .section-title, .card-header")
+                .mapNotNull { classifySectionKey(normalizeHeading(it.text())) }
+                .distinct()
+            if (distinctChildSections.size > 1) return@forEach
+            container.select("div.anime__item, div.product__item, div.card, div.anime__sidebar__comment__item, div.product__sidebar__comment__item, li, a[href]")
+                .forEach { addSummaryToTarget(it, targetList) }
         }
 
-        // Explicit sidebar airing fallback (classic JKAnime sidebar)
-        if (airing.isEmpty()) {
-            doc.select(
-                "div.anime__sidebar__comment__item, div.product__sidebar__comment__item, " +
-                    "div.anime__sidebar__view__item, div.side-box a"
-            ).forEach { el ->
-                parseAnimeSummaryElement(el)?.let { item ->
-                    val existingIdx = airing.indexOfFirst { it.slug == item.slug }
-                    if (existingIdx == -1) {
-                        airing.add(item)
-                    } else if (airing[existingIdx].coverUrl.isBlank() && item.coverUrl.isNotBlank()) {
-                        airing[existingIdx] = airing[existingIdx].copy(coverUrl = item.coverUrl)
+        // 3C. Embedded JSON arrays in home <script> tags if either list is still empty
+        if (airing.isEmpty() || recentAdded.isEmpty()) {
+            val emisionPattern = Regex(
+                """(?:(?:var|let|const)\s+|window\.)?(?:emision|en_emision|airing|programacion)\s*=\s*(\[\s*\{.*?\}\s*\])""",
+                RegexOption.DOT_MATCHES_ALL
+            )
+            val recentPattern = Regex(
+                """(?:(?:var|let|const)\s+|window\.)?(?:recientes|agregados|recent|ultimos|ultimos_animes|animes)\s*=\s*(\[\s*\{.*?\}\s*\])""",
+                RegexOption.DOT_MATCHES_ALL
+            )
+            if (airing.isEmpty()) {
+                emisionPattern.findAll(html).forEach { m ->
+                    runCatching {
+                        val arr = Json.parseToJsonElement(m.groupValues[1].replace("&quot;", "\"")).jsonArray
+                        parseAnimeJsonArray(arr, airing)
+                    }
+                }
+            }
+            if (recentAdded.isEmpty()) {
+                recentPattern.findAll(html).forEach { m ->
+                    runCatching {
+                        val arr = Json.parseToJsonElement(m.groupValues[1].replace("&quot;", "\"")).jsonArray
+                        parseAnimeJsonArray(arr, recentAdded)
                     }
                 }
             }
         }
 
-        // General recent anime cards fallback, strictly excluding items already placed in airing
+        // 3D. Explicit sidebar airing fallback (classic JKAnime sidebar / aside)
+        if (airing.isEmpty()) {
+            doc.select(
+                "div.anime__sidebar__comment__item, div.product__sidebar__comment__item, " +
+                    "div.anime__sidebar__view__item, div.side-box a, aside a[href], div.col-lg-4 a[href]"
+            ).forEach { el -> addSummaryToTarget(el, airing) }
+        }
+
+        // 3E. Explicit recent-added container fallback ONLY (never grab unrelated popular classics)
         if (recentAdded.isEmpty()) {
             val airingSlugs = airing.map { it.slug }.toSet()
-            doc.select("div.recent__product div.anime__item, div.anime__item, div.product__item, div.card")
+            doc.select("div.recent__product div.anime__item, div.last_animes div.anime__item, div.last_animes a[href], div.latest__animes div.anime__item")
                 .forEach { el ->
                     parseAnimeSummaryElement(el)?.let { item ->
                         if (item.slug !in airingSlugs) {
@@ -222,8 +324,8 @@ object JkAnimeParser {
                         }
                     }
                 }
-        } else {
-            // Also ensure recentAdded and airing don't display identical lists
+        } else if (airing.isNotEmpty()) {
+            // Ensure recentAdded and airing don't display identical lists
             val airingSlugs = airing.map { it.slug }.toSet()
             val filteredRecent = recentAdded.filter { it.slug !in airingSlugs }
             if (filteredRecent.isNotEmpty()) {
@@ -292,58 +394,122 @@ object JkAnimeParser {
     }
 
     fun parseDirectoryOrSearch(html: String, currentPage: Int): DirectoryPage {
-        val doc = Jsoup.parse(html, BASE_URL)
+        val trimmed = html.trim()
         val items = mutableListOf<AnimeSummary>()
+
+        // 0. Raw JSON payload (e.g. from /ajax/buscar or /ajax/search)
+        if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+            val rawMeta = parseRawDirectoryJson(trimmed, items)
+            if (items.isNotEmpty()) {
+                return DirectoryPage(
+                    items = items,
+                    currentPage = currentPage,
+                    hasNextPage = rawMeta.hasNextPage
+                )
+            }
+        }
+
+        val doc = Jsoup.parse(html, BASE_URL)
 
         // 1. Parse embedded JSON in <script> tags (used by JKAnime Vue/Laravel /directorio & /buscar)
         val embeddedMeta = parseEmbeddedDirectoryJson(html, items)
 
-        // 2. Parse rendered DOM cards across classic and modern JKAnime themes
-        val cards = doc.select(
-            "div.anime__page__content div.anime__item, " +
-                "div.results div.anime__item, " +
+        val bodyTextLower = doc.body()?.text()?.lowercase().orEmpty()
+        val explicitEmpty = bodyTextLower.contains("no se encontraron") ||
+            bodyTextLower.contains("sin resultados") ||
+            bodyTextLower.contains("no hay animes")
+
+        // 2. Parse rendered DOM cards across classic and modern JKAnime themes (excluding sidebars/nav/footer)
+        val hasMainDirectoryGrid = doc.selectFirst("div.anime__page__content, div.results, div.dir__page") != null
+        val cards = if (hasMainDirectoryGrid) {
+            doc.select(
+                "div.anime__page__content div.anime__item, " +
+                    "div.anime__page__content div.custom_item2, " +
+                    "div.anime__page__content div.dir__item, " +
+                    "div.anime__page__content div.card, " +
+                    "div.results div.anime__item, " +
+                    "div.results div.custom_item2, " +
+                    "div.dir__page div.anime__item, " +
+                    "div.dir__page div.custom_item2, " +
+                    "div.dir__page div.dir__item"
+            )
+        } else if (!explicitEmpty) {
+            doc.select(
                 "div.custom_item2, " +
-                "div.dir__item, " +
-                "div.anime__item, " +
-                "div.product__item, " +
-                "div.card, " +
-                "article.anime, " +
-                "div.row > div[class*=col-]"
-        )
+                    "div.dir__item, " +
+                    "div.anime__item, " +
+                    "div.product__item, " +
+                    "div.card, " +
+                    "article.anime, " +
+                    "div.row > div[class*=col-]:not(:has(div.anime__item, div.product__item, div.card, div.custom_item2, div.dir__item))"
+            ).filterNot { el ->
+                el.parents().any { p ->
+                    p.tagName() in setOf("aside", "nav", "header", "footer") ||
+                        p.hasClass("anime__sidebar__comment") ||
+                        p.hasClass("anime__sidebar__view") ||
+                        p.hasClass("side-box")
+                }
+            }
+        } else {
+            emptyList()
+        }
 
         cards.forEach { card ->
+            // Skip wide page-wrapper columns that contain several distinct anime links
+            val distinctSlugsInCard = card.select("a[href]")
+                .mapNotNull { extractSlugFromAnimeUrl(normalizeUrl(it.attr("href"))) }
+                .distinct()
+            if (distinctSlugsInCard.size > 1) return@forEach
+
             parseAnimeSummaryElement(card)?.let { item ->
-                if (items.none { it.slug == item.slug }) {
+                val idx = items.indexOfFirst { it.slug == item.slug }
+                if (idx == -1) {
                     items.add(item)
+                } else if (items[idx].coverUrl.isBlank() && item.coverUrl.isNotBlank()) {
+                    items[idx] = items[idx].copy(coverUrl = item.coverUrl)
                 }
             }
         }
 
-        // 3. Broad fallback scan for anime links with images or data-setbg
-        if (items.isEmpty()) {
-            doc.select("a[href]").forEach { a ->
+        // 3. Scoped fallback scan for anime links (avoid header/footer nav links if page says empty)
+        if (items.isEmpty() && !explicitEmpty) {
+            val contentRoots = doc.select(
+                "section.contenido, div.anime__page__content, div.dir__page, main, div.container div.row"
+            ).ifEmpty { doc.select("body") }
+            contentRoots.select("a[href]").forEach { a ->
                 val href = normalizeUrl(a.attr("href"))
                 val slug = extractSlugFromAnimeUrl(href) ?: return@forEach
-                val container = a.parent()
+                val container = findSingleAnimeParent(a, slug) ?: a.parent()
                 val cover = extractImageUrl(a).ifBlank {
                     container?.let { extractImageUrl(it) }.orEmpty()
                 }
-                val title = a.selectFirst("h5, h4, h3, .title, .card-title")?.text()?.trim()
+                val title = a.selectFirst("h5, h4, h3, .title, .card-title, span")?.text()?.trim()
                     ?.takeIf { it.isNotBlank() }
                     ?: a.attr("title").trim().takeIf { it.isNotBlank() }
                     ?: container?.selectFirst("h5, h4, h3, .title, .card-title")?.text()?.trim()
                         ?.takeIf { it.isNotBlank() }
-                    ?: a.text().trim().takeIf { it.length > 2 && !it.equals("Ver", true) }
+                    ?: a.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.length > 1 }
+                    ?: a.text().trim().takeIf {
+                        it.length > 1 &&
+                            !it.equals("Ver", true) &&
+                            !it.equals("Inicio", true) &&
+                            !it.equals("Directorio", true)
+                    }
                     ?: ""
-                if (cover.isNotBlank() && title.isNotBlank() && items.none { it.slug == slug }) {
-                    items.add(
-                        AnimeSummary(
-                            slug = slug,
-                            title = title,
-                            url = "$BASE_URL/$slug/",
-                            coverUrl = cover
+                if (title.isNotBlank()) {
+                    val idx = items.indexOfFirst { it.slug == slug }
+                    if (idx == -1) {
+                        items.add(
+                            AnimeSummary(
+                                slug = slug,
+                                title = title,
+                                url = "$BASE_URL/$slug/",
+                                coverUrl = cover
+                            )
                         )
-                    )
+                    } else if (items[idx].coverUrl.isBlank() && cover.isNotBlank()) {
+                        items[idx] = items[idx].copy(coverUrl = cover)
+                    }
                 }
             }
         }
@@ -362,7 +528,100 @@ object JkAnimeParser {
         )
     }
 
+    data class DirectoryFilterOptions(
+        val statusOptions: Map<String, String> = emptyMap(),
+        val typeOptions: Map<String, String> = emptyMap(),
+        val genreOptions: Map<String, String> = emptyMap(),
+        val genreLinks: Map<String, String> = emptyMap(),
+        val formAction: String = ""
+    )
+
+    fun parseDirectoryFilterOptions(html: String): DirectoryFilterOptions {
+        val doc = Jsoup.parse(html, BASE_URL)
+        val statusOpts = linkedMapOf<String, String>()
+        val typeOpts = linkedMapOf<String, String>()
+        val genreOpts = linkedMapOf<String, String>()
+        val genreLinks = linkedMapOf<String, String>()
+
+        fun norm(s: String): String = s.lowercase()
+            .replace("á", "a").replace("é", "e").replace("í", "i")
+            .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
+            .trim()
+
+        doc.select("select").forEach { sel ->
+            val selName = norm(sel.attr("name") + " " + sel.id())
+            sel.select("option").forEach { opt ->
+                val value = opt.attr("value").trim()
+                val label = norm(opt.text())
+                if (value.isBlank() || label == "todos" || label == "all" || value == "0") return@forEach
+                when {
+                    "estado" in selName || "status" in selName -> {
+                        when {
+                            "emision" in label || "curso" in label -> statusOpts.putIfAbsent("emision", value)
+                            "finaliz" in label -> statusOpts.putIfAbsent("finalizado", value)
+                            "estren" in label || "proxim" in label -> statusOpts.putIfAbsent("estreno", value)
+                        }
+                    }
+                    "tipo" in selName || "type" in selName -> {
+                        when {
+                            "pelicula" in label || "movie" in label -> typeOpts.putIfAbsent("peliculas", value)
+                            "ova" in label -> typeOpts.putIfAbsent("ovas", value)
+                            "anime" in label || "serie" in label || label == "tv" -> typeOpts.putIfAbsent("animes", value)
+                        }
+                    }
+                    "genero" in selName || "genre" in selName -> {
+                        genreOpts.putIfAbsent(label, value)
+                    }
+                }
+            }
+        }
+
+        doc.select("a[href*=/genero/], a[href*=genero=]").forEach { a ->
+            val label = norm(a.text())
+            val href = normalizeUrl(a.attr("href"))
+            if (label.isNotBlank() && href.isNotBlank()) {
+                genreLinks.putIfAbsent(label, href)
+            }
+        }
+
+        val formAction = doc.selectFirst("form[action*=directorio], form[action*=buscar], form")
+            ?.attr("action")?.trim()?.takeIf { it.isNotBlank() }?.let(::normalizeUrl).orEmpty()
+
+        return DirectoryFilterOptions(
+            statusOptions = statusOpts,
+            typeOptions = typeOpts,
+            genreOptions = genreOpts,
+            genreLinks = genreLinks,
+            formAction = formAction
+        )
+    }
+
     private data class EmbeddedDirectoryMeta(val hasNextPage: Boolean = false)
+
+    private fun parseRawDirectoryJson(
+        rawJson: String,
+        out: MutableList<AnimeSummary>
+    ): EmbeddedDirectoryMeta {
+        return try {
+            val root = Json.parseToJsonElement(rawJson)
+            var hasNext = false
+            val arr = when {
+                rawJson.startsWith("[") -> root.jsonArray
+                else -> {
+                    val obj = root.jsonObject
+                    val current = obj["current_page"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                    val last = obj["last_page"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+                    if (current != null && last != null && current < last) hasNext = true
+                    if (!obj["next_page_url"]?.jsonPrimitive?.contentOrNull.isNullOrBlank()) hasNext = true
+                    (obj["data"] ?: obj["animes"] ?: obj["results"] ?: obj["items"])?.jsonArray
+                }
+            }
+            arr?.let { parseAnimeJsonArray(it, out) }
+            EmbeddedDirectoryMeta(hasNextPage = hasNext)
+        } catch (_: Throwable) {
+            EmbeddedDirectoryMeta()
+        }
+    }
 
     private fun parseEmbeddedDirectoryJson(
         html: String,
@@ -381,9 +640,9 @@ object JkAnimeParser {
 
         val candidates = mutableListOf<String>()
         val arrayPatterns = listOf(
-            Regex("""(?:var|let|const)\s+(?:animes|data|list|results)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;""", RegexOption.DOT_MATCHES_ALL),
-            Regex("""["']data["']\s*:\s*(\[\s*\{.*?\}\s*\])""", RegexOption.DOT_MATCHES_ALL),
-            Regex(""":animes=["'](\[\s*\{.*?\}\s*\])["']""", RegexOption.DOT_MATCHES_ALL)
+            Regex("""(?:(?:var|let|const)\s+|window\.)?(?:animes|data|list|results|search|resultados|directorio|items|catalog)\s*=\s*(\[\s*\{.*?\}\s*\])\s*;?""", RegexOption.DOT_MATCHES_ALL),
+            Regex("""["']?(?:data|animes|results|items)["']?\s*:\s*(\[\s*\{.*?\}\s*\])""", RegexOption.DOT_MATCHES_ALL),
+            Regex(""":(?:animes|results|items)=["'](\[\s*\{.*?\}\s*\])["']""", RegexOption.DOT_MATCHES_ALL)
         )
         arrayPatterns.forEach { regex ->
             regex.findAll(html).forEach { m ->
@@ -392,46 +651,53 @@ object JkAnimeParser {
         }
 
         for (raw in candidates) {
-            val cleaned = raw.replace("&quot;", "\"")
+            val cleaned = raw.replace("&quot;", "\"").replace("&#039;", "'")
             try {
                 val arr = Json.parseToJsonElement(cleaned).jsonArray
-                for (el in arr) {
-                    val obj = el.jsonObject
-                    val rawSlug = obj["slug"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                    val rawUrl = obj["url"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                    val slug = rawSlug.ifBlank { extractSlugFromAnimeUrl(normalizeUrl(rawUrl)).orEmpty() }
-                    if (slug.isBlank() || slug in NON_ANIME_SLUGS) continue
-                    val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim()
-                        ?: obj["name"]?.jsonPrimitive?.contentOrNull?.trim()
-                        ?: continue
-                    val rawImg = obj["image"]?.jsonPrimitive?.contentOrNull
-                        ?: obj["cover"]?.jsonPrimitive?.contentOrNull
-                        ?: obj["thumbnail"]?.jsonPrimitive?.contentOrNull
-                        ?: ""
-                    val cover = when {
-                        rawImg.isBlank() -> ""
-                        rawImg.startsWith("http") || rawImg.startsWith("/") -> normalizeUrl(rawImg)
-                        else -> "https://cdn.jkdesa.com/assets/images/animes/image/$rawImg"
-                    }
-                    val type = obj["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    val status = obj["status"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    if (title.isNotBlank() && out.none { it.slug == slug }) {
-                        out.add(
-                            AnimeSummary(
-                                slug = slug,
-                                title = title,
-                                url = "$BASE_URL/$slug/",
-                                coverUrl = cover,
-                                type = type,
-                                status = status
-                            )
-                        )
-                    }
-                }
+                parseAnimeJsonArray(arr, out)
             } catch (_: Throwable) {
             }
         }
         return EmbeddedDirectoryMeta(hasNextPage = hasNextPage)
+    }
+
+    private fun parseAnimeJsonArray(
+        arr: kotlinx.serialization.json.JsonArray,
+        out: MutableList<AnimeSummary>
+    ) {
+        for (el in arr) {
+            val obj = el.jsonObject
+            val rawSlug = obj["slug"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val rawUrl = obj["url"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val slug = rawSlug.ifBlank { extractSlugFromAnimeUrl(normalizeUrl(rawUrl)).orEmpty() }
+            if (slug.isBlank() || slug in NON_ANIME_SLUGS) continue
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim()
+                ?: obj["name"]?.jsonPrimitive?.contentOrNull?.trim()
+                ?: continue
+            val rawImg = obj["image"]?.jsonPrimitive?.contentOrNull
+                ?: obj["cover"]?.jsonPrimitive?.contentOrNull
+                ?: obj["thumbnail"]?.jsonPrimitive?.contentOrNull
+                ?: ""
+            val cover = when {
+                rawImg.isBlank() -> ""
+                rawImg.startsWith("http") || rawImg.startsWith("/") || rawImg.startsWith("//") -> normalizeUrl(rawImg)
+                else -> "https://cdn.jkdesa.com/assets/images/animes/image/$rawImg"
+            }
+            val type = obj["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val status = obj["status"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (title.isNotBlank() && out.none { it.slug == slug }) {
+                out.add(
+                    AnimeSummary(
+                        slug = slug,
+                        title = title,
+                        url = "$BASE_URL/$slug/",
+                        coverUrl = cover,
+                        type = type,
+                        status = status
+                    )
+                )
+            }
+        }
     }
 
     fun parseAnimeDetail(slug: String, html: String): AnimeDetail {
@@ -497,7 +763,7 @@ object JkAnimeParser {
 
         val pageRanges = mutableListOf<EpisodePageRange>()
         var sequentialIdx = 1
-        doc.select("div.anime__pagination a.numbers, div.anime__pagination a, ul.pagination a, .episodes-pagination a")
+        doc.select("div.anime__pagination a.numbers, div.anime__pagination a, ul.pagination a, .episodes-pagination a, #episode_page a")
             .forEach { a ->
                 val label = a.text().trim()
                 if (label.isBlank() ||
@@ -510,17 +776,30 @@ object JkAnimeParser {
                 }
                 val hrefPage = Regex("""#pag(\d+)|page=(\d+)""").find(a.attr("href"))
                     ?.let { m -> (m.groupValues[1].ifEmpty { m.groupValues[2] }).toIntOrNull() }
-                val dataPage = a.attr("data-page").toIntOrNull()
+                val onclickPage = Regex("""(?:pagination|paginacion|loadEpisodes)\w*\([^)]*?\b(\d+)\s*['"]?\s*\)""")
+                    .find(a.attr("onclick"))?.groupValues?.getOrNull(1)?.toIntOrNull()
+                val dataPage = a.attr("data-page").ifBlank { a.attr("data-pag") }.toIntOrNull()
                 val rangeStartPage = Regex("""^(\d+)\s*[-–]\s*\d+$""").find(label)
                     ?.groupValues?.getOrNull(1)?.toIntOrNull()
                     ?.let { ((it - 1).coerceAtLeast(0) / 12) + 1 }
-                val pageNum = hrefPage ?: dataPage ?: rangeStartPage ?: label.toIntOrNull() ?: sequentialIdx++
+                val pageNum = hrefPage ?: onclickPage ?: dataPage ?: rangeStartPage ?: label.toIntOrNull() ?: sequentialIdx++
                 if (pageRanges.none { it.page == pageNum }) {
                     pageRanges.add(EpisodePageRange(page = pageNum, label = label))
                 }
             }
 
-        val directEpisodes = parseDirectEpisodeLinks(slug, doc)
+        val mergedDirect = LinkedHashMap<Int, EpisodeItem>()
+        parseDirectEpisodeLinks(slug, doc).forEach { mergedDirect[it.number] = it }
+
+        // Parse embedded episode JSON arrays if present in page scripts
+        Regex("""(?:(?:var|let|const)\s+|window\.)?(?:episodes|episodios|capitulos|episodesList)\s*=\s*(\[\s*\{.*?\}\s*\])""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(html)
+            .forEach { m ->
+                parseEpisodesJsonOrHtml(slug, m.groupValues[1]).forEach { ep ->
+                    val existing = mergedDirect[ep.number]
+                    mergedDirect[ep.number] = if (existing == null || ep.thumbnailUrl.isNotBlank()) ep else existing
+                }
+            }
 
         return AnimeDetail(
             slug = slug,
@@ -534,7 +813,7 @@ object JkAnimeParser {
             airedInfo = airedInfo,
             totalEpisodesText = totalEpisodesText,
             genres = genres,
-            episodes = directEpisodes,
+            episodes = mergedDirect.values.sortedBy { it.number },
             pageRanges = pageRanges
         )
     }
@@ -657,7 +936,9 @@ object JkAnimeParser {
                 for (element in arr) {
                     val obj = element.jsonObject
                     val serverName = obj["server"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-                        ?: obj["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        ?: obj["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                        ?: obj["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                        ?: obj["slug"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     val remote = obj["remote"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     val urlField = obj["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     val candidate = when {
@@ -716,23 +997,45 @@ object JkAnimeParser {
         return servers
     }
 
+    fun parseHasNextEpisode(html: String, slug: String, episodeNumber: Int): Boolean? {
+        val doc = Jsoup.parse(html, "$BASE_URL/$slug/$episodeNumber/")
+        val nextEp = episodeNumber + 1
+        val escapedSlug = Regex.escape(slug)
+        val nextRegex = Regex("""/$escapedSlug/$nextEp/?$""")
+        val hasDirectNext = doc.select("a[href]").any { a ->
+            val href = normalizeUrl(a.attr("href")).substringBefore("?").substringBefore("#")
+            nextRegex.containsMatchIn(href)
+        }
+        if (hasDirectNext) return true
+
+        val nextButton = doc.selectFirst("a:contains(Siguiente), a:contains(Próximo), a.next")
+        if (nextButton != null) {
+            val href = nextButton.attr("href").trim()
+            if (href.isNotBlank() && href != "#" && !nextButton.hasClass("disabled")) {
+                return true
+            }
+        }
+
+        val hasEpisodeNav = doc.select("a:contains(Lista), a:contains(Anterior), a[href*='/$slug/${episodeNumber - 1}']")
+            .isNotEmpty()
+        return if (hasEpisodeNav) false else null
+    }
+
     private fun parseDirectEpisodeLinks(slug: String, doc: Document): List<EpisodeItem> {
         val list = mutableListOf<EpisodeItem>()
         val escapedSlug = Regex.escape(slug)
-        val epRegex = Regex("""/$escapedSlug/(\d+)/?$""")
-        doc.select("a[href]").forEach { a ->
-            val rawHref = normalizeUrl(a.attr("href"))
-            val cleanHref = rawHref.substringBefore("?").substringBefore("#")
-            val match = epRegex.find(cleanHref) ?: return@forEach
-            val num = match.groupValues[1].toIntOrNull() ?: return@forEach
-            val label = a.selectFirst("h5, h6, span, p")?.text()?.trim()
+        val epRegex = Regex("""/$escapedSlug/(?:episodio-)?(\d+)(?:/|\?|$)""")
+
+        fun addEpisode(num: Int, el: Element) {
+            val label = el.selectFirst("h5, h6, span, p")?.text()?.trim()
                 ?.takeIf { it.isNotBlank() }
-                ?: a.text().trim().takeIf { it.isNotBlank() }
+                ?: el.text().trim().takeIf { it.isNotBlank() }
                 ?: "Episodio $num"
-            val thumb = extractImageUrl(a).ifBlank {
-                a.parent()?.let { extractImageUrl(it) }.orEmpty()
+            val thumb = extractImageUrl(el).ifBlank {
+                el.parent()?.let { extractImageUrl(it) }.orEmpty()
             }
-            if (list.none { it.number == num }) {
+            val idx = list.indexOfFirst { it.number == num }
+            if (idx == -1) {
                 list.add(
                     EpisodeItem(
                         number = num,
@@ -741,28 +1044,58 @@ object JkAnimeParser {
                         thumbnailUrl = thumb
                     )
                 )
+            } else if (list[idx].thumbnailUrl.isBlank() && thumb.isNotBlank()) {
+                list[idx] = list[idx].copy(thumbnailUrl = thumb)
             }
         }
+
+        doc.select("a[href]").forEach { a ->
+            val rawHref = normalizeUrl(a.attr("href"))
+            val cleanHref = rawHref.substringBefore("?").substringBefore("#")
+            val match = epRegex.find(cleanHref) ?: return@forEach
+            val num = match.groupValues[1].toIntOrNull() ?: return@forEach
+            addEpisode(num, a)
+        }
+
+        doc.select(
+            "div.anime__details__episodes a, #episodes-content a, #episodes a, [data-ep], [data-episode]"
+        ).forEach { el ->
+            val dataEp = el.attr("data-ep")
+                .ifBlank { el.attr("data-episode") }
+                .ifBlank {
+                    Regex("""(?:ep|episodio)[.\s_-]*(\d+)""", RegexOption.IGNORE_CASE)
+                        .find(el.text())?.groupValues?.getOrNull(1).orEmpty()
+                }
+            val num = dataEp.filter { it.isDigit() }.toIntOrNull() ?: return@forEach
+            addEpisode(num, el)
+        }
+
         return list.sortedBy { it.number }
     }
 
     private fun extractAnimeId(html: String, doc: Document): String {
         val patterns = listOf(
             Regex("""ajax/pagination_episodes/(\d+)"""),
+            Regex("""ajax/episodes/(\d+)"""),
             Regex("""ajax/last_episode/(\d+)"""),
-            Regex("""(?:var|let|const)\s+(?:anime_id|id_anime|animeId)\s*=\s*["']?(\d+)["']?"""),
+            Regex("""(?:var|let|const)\s+(?:anime_id|id_anime|animeId|idAnime)\s*=\s*["']?(\d+)["']?"""),
             Regex("""data-anime(?:-id)?=["'](\d+)["']"""),
-            Regex("""["']?(?:anime_id|id_anime)["']?\s*[:=]\s*["']?(\d+)["']?""")
+            Regex("""["']?(?:anime_id|id_anime|animeId)["']?\s*[:=]\s*["']?(\d+)["']?"""),
+            Regex("""(?:guardar|favorit\w*|episodes?)\w*\(\s*["']?(\d{1,8})["']?\s*\)""")
         )
         for (regex in patterns) {
             val found = regex.find(html)?.groupValues?.getOrNull(1)
             if (!found.isNullOrBlank()) return found
         }
-        doc.selectFirst("[data-anime], [data-anime-id], [data-id]")?.let { el ->
+        val candidates = doc.select("[data-anime-id], [data-anime], [data-id]")
+        for (el in candidates) {
             val attr = el.attr("data-anime-id")
                 .ifBlank { el.attr("data-anime") }
                 .ifBlank { el.attr("data-id") }
-            if (attr.all { it.isDigit() } && attr.isNotBlank()) return attr
+                .trim()
+            if (attr.isNotBlank() && attr.length <= 8 && attr.all { it.isDigit() }) {
+                return attr
+            }
         }
         return ""
     }
@@ -792,11 +1125,32 @@ object JkAnimeParser {
         val coverUrl = extractImageUrl(el).ifBlank {
             enclosingCard?.let { extractImageUrl(it) }.orEmpty()
         }
-        val badges = scope.select("ul li, .ep, .comment, .view, .badge, .type")
+        val rawBadges = scope.select("ul li, .ep, .comment, .view, .badge, .type, .card-txt, .status")
             .map { it.text().trim() }
             .filter { it.isNotBlank() }
-        val statusOrType = badges.firstOrNull().orEmpty()
-        val epBadge = scope.selectFirst(".ep")?.text()?.trim().orEmpty()
+
+        var parsedType = ""
+        var parsedStatus = ""
+        var parsedEpBadge = scope.selectFirst(".ep")?.text()?.trim().orEmpty()
+
+        rawBadges.forEach { b ->
+            val lower = b.lowercase()
+            when {
+                lower.contains("emisi") || lower.contains("curso") ||
+                    lower.contains("finaliz") || lower.contains("concl") ||
+                    lower.contains("estren") || lower.contains("proxim") || lower.contains("próxim") -> {
+                    if (parsedStatus.isBlank()) parsedStatus = b
+                }
+                lower.contains("anime") || lower.contains("serie") || lower == "tv" ||
+                    lower.contains("pel") || lower.contains("movie") ||
+                    lower.contains("ova") || lower.contains("ona") || lower.contains("especial") -> {
+                    if (parsedType.isBlank()) parsedType = b
+                }
+                lower.contains("ep") || lower.contains("cap") || lower.all { it.isDigit() } -> {
+                    if (parsedEpBadge.isBlank()) parsedEpBadge = b
+                }
+            }
+        }
         val snippet = scope.selectFirst("p")?.text()?.trim().orEmpty()
 
         return AnimeSummary(
@@ -804,8 +1158,9 @@ object JkAnimeParser {
             title = title,
             url = "$BASE_URL/$slug/",
             coverUrl = coverUrl,
-            type = statusOrType,
-            episodeBadge = epBadge,
+            type = parsedType,
+            status = parsedStatus,
+            episodeBadge = parsedEpBadge,
             synopsisSnippet = snippet
         )
     }
@@ -924,6 +1279,111 @@ object JkAnimeParser {
             "jk.php" in lower -> "JKPlayer"
             else -> "Servidor"
         }
+    }
+
+    fun parseSchedule(html: String): AnimeSchedule {
+        val doc = Jsoup.parse(html, BASE_URL)
+        val dayDefs = listOf(
+            "lunes" to "Lunes",
+            "martes" to "Martes",
+            "miercoles" to "Miércoles",
+            "jueves" to "Jueves",
+            "viernes" to "Viernes",
+            "sabado" to "Sábado",
+            "domingo" to "Domingo"
+        )
+        val buckets = dayDefs.associate { it.first to mutableListOf<ScheduleItem>() }
+
+        fun normalizeDay(raw: String): String? {
+            val clean = raw.lowercase()
+                .replace("á", "a")
+                .replace("é", "e")
+                .replace("í", "i")
+                .replace("ó", "o")
+                .replace("ú", "u")
+                .trim()
+            return dayDefs.firstOrNull { (key, _) ->
+                Regex("""\b$key\b""").containsMatchIn(clean) || clean.startsWith(key)
+            }?.first
+        }
+
+        fun collectCardsFromContainer(container: Element, target: MutableList<ScheduleItem>) {
+            val candidates = container.select(
+                "div.box, div.cajas, div.anime__item, div.card, div.item, li, a[href]"
+            )
+            candidates.forEach { el ->
+                val anchor = if (el.tagName() == "a") el else el.selectFirst("a[href]") ?: return@forEach
+                val href = normalizeUrl(anchor.attr("href"))
+                val slug = extractSlugFromAnimeUrl(href) ?: return@forEach
+                val scope = if (el.tagName() == "a") findSingleAnimeParent(el, slug) ?: el.parent() ?: el else el
+                val title = scope.selectFirst("h5, h4, h3, .title, .card-title, span.title, p")
+                    ?.text()?.trim()?.takeIf { it.length > 1 }
+                    ?: anchor.attr("title").trim().takeIf { it.length > 1 }
+                    ?: scope.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.length > 1 }
+                    ?: anchor.text().trim().takeIf { it.length > 1 && !it.equals("Ver", true) }
+                    ?: return@forEach
+                val cover = extractImageUrl(scope).ifBlank { extractImageUrl(anchor) }
+                val timeText = scope.selectFirst(".hora, .time, .badge, span.ep, time")
+                    ?.text()?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: Regex("""\b\d{1,2}:\d{2}\b""").find(scope.text())?.value.orEmpty()
+                val idx = target.indexOfFirst { it.slug == slug }
+                if (idx == -1) {
+                    target.add(
+                        ScheduleItem(
+                            slug = slug,
+                            title = title,
+                            url = "$BASE_URL/$slug/",
+                            coverUrl = cover,
+                            releaseTime = timeText,
+                            provider = AnimeProvider.JKANIME
+                        )
+                    )
+                } else if (target[idx].coverUrl.isBlank() && cover.isNotBlank()) {
+                    target[idx] = target[idx].copy(coverUrl = cover)
+                }
+            }
+        }
+
+        // 1. Containers explicitly identified by day class/id/section heading
+        doc.select("div.semana, div.tab-pane, section, div.box, div.card, div.row > div").forEach { container ->
+            val idOrClass = "${container.id()} ${container.className()}"
+            val headingText = container.selectFirst("h1, h2, h3, h4, h5, .card-header, .semana-title, .title")
+                ?.text().orEmpty()
+            val dayKey = normalizeDay(idOrClass) ?: normalizeDay(headingText) ?: return@forEach
+            val target = buckets[dayKey] ?: return@forEach
+            // Avoid giant parent wrappers containing multiple weekday headings
+            val childDayHeadings = container.select("h2, h3, h4, h5")
+                .mapNotNull { normalizeDay(it.text()) }
+                .distinct()
+            if (childDayHeadings.size > 1) return@forEach
+            collectCardsFromContainer(container, target)
+        }
+
+        // 2. Sibling heading -> next grid/list pattern (e.g. <h2>Lunes</h2><div class="row">...</div>)
+        if (buckets.values.all { it.isEmpty() }) {
+            doc.select("h2, h3, h4, h5").forEach { heading ->
+                val dayKey = normalizeDay(heading.text()) ?: return@forEach
+                val target = buckets[dayKey] ?: return@forEach
+                var sibling = heading.nextElementSibling()
+                while (sibling != null) {
+                    val siblingHeadingDay = if (sibling.tagName() in listOf("h2", "h3", "h4", "h5")) {
+                        normalizeDay(sibling.text())
+                    } else null
+                    if (siblingHeadingDay != null) break
+                    collectCardsFromContainer(sibling, target)
+                    if (sibling.select("a[href]").isNotEmpty()) break
+                    sibling = sibling.nextElementSibling()
+                }
+            }
+        }
+
+        return AnimeSchedule(
+            provider = AnimeProvider.JKANIME,
+            days = dayDefs.map { (key, label) ->
+                ScheduleDay(dayKey = key, dayLabel = label, items = buckets[key].orEmpty())
+            }
+        )
     }
 
     fun normalizeUrl(raw: String): String {

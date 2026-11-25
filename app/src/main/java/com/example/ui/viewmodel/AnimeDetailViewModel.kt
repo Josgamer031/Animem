@@ -49,12 +49,37 @@ class AnimeDetailViewModel(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
+    val isFavorite: StateFlow<Boolean> =
+        (repository.favorites ?: MutableStateFlow(emptyList()))
+            .map { list ->
+                list.any { it.animeSlug == slug && it.providerId == provider.id }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    private val _episodeQuery = MutableStateFlow("")
+    val episodeQuery: StateFlow<String> = _episodeQuery.asStateFlow()
+
     private val cachedPages = mutableMapOf<Int, List<EpisodeItem>>()
     private val allEpisodesMap = LinkedHashMap<Int, EpisodeItem>()
     private var backgroundPagesJob: Job? = null
 
     init {
         loadDetail()
+    }
+
+    fun updateEpisodeQuery(query: String) {
+        _episodeQuery.value = query.filter { it.isDigit() }
+    }
+
+    fun toggleFavorite() {
+        val current = _uiState.value as? AnimeDetailUiState.Success ?: return
+        viewModelScope.launch {
+            repository.toggleFavorite(current.detail)
+        }
+    }
+
+    fun onGenreSelected(genre: String) {
+        repository.requestExploreGenre(provider, genre)
     }
 
     fun loadDetail() {

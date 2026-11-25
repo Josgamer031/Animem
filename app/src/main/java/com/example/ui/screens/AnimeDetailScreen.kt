@@ -1,6 +1,11 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,10 +33,17 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -40,7 +52,11 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -54,13 +70,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -79,10 +98,23 @@ fun AnimeDetailScreen(
     viewModel: AnimeDetailViewModel,
     onBack: () -> Unit,
     onPlayEpisode: (slug: String, episode: Int, title: String, coverUrl: String, providerId: String, episodeUrl: String) -> Unit,
+    onNavigateToGenreExplore: () -> Unit,
     onUnlockCloudflare: (targetUrl: String, onUnlocked: () -> Unit) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val watchedMap by viewModel.watchedEpisodes.collectAsStateWithLifecycle()
+    val isFavorite by viewModel.isFavorite.collectAsStateWithLifecycle()
+    val episodeQuery by viewModel.episodeQuery.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    val favoriteScale by animateFloatAsState(
+        targetValue = if (isFavorite) 1.15f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "favorite_scale"
+    )
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -118,13 +150,22 @@ fun AnimeDetailScreen(
                     AnimeDetailContent(
                         detail = state.detail,
                         episodes = state.displayedEpisodes,
+                        episodeQuery = episodeQuery,
                         selectedPage = state.selectedPage,
                         isLoadingEpisodes = state.isLoadingEpisodes,
                         isLoadingMoreEpisodes = state.isLoadingMoreEpisodes,
                         sortDescending = state.sortDescending,
+                        isFavorite = isFavorite,
                         watchedMap = watchedMap,
+                        onEpisodeQueryChange = viewModel::updateEpisodeQuery,
                         onSelectPage = viewModel::selectEpisodePage,
                         onToggleSort = viewModel::toggleSortOrder,
+                        onToggleFavorite = viewModel::toggleFavorite,
+                        onGenreClick = { genre ->
+                            viewModel.onGenreSelected(genre)
+                            onNavigateToGenreExplore()
+                        },
+                        onRetryEpisodes = viewModel::loadDetail,
                         onPlayEpisode = { epNum ->
                             val epUrl = state.detail.episodes.firstOrNull { it.number == epNum }?.url.orEmpty()
                             onPlayEpisode(
@@ -140,24 +181,82 @@ fun AnimeDetailScreen(
                 }
             }
 
-            // Floating Back Button
-            Surface(
-                color = Color(0xAA0B0D14),
-                shape = CircleShape,
+            // Floating Top Bar: Back + Favorite + Share
+            Row(
                 modifier = Modifier
+                    .fillMaxWidth()
                     .statusBarsPadding()
-                    .padding(14.dp)
-                    .size(48.dp)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.testTag("detail_back_button")
+                Surface(
+                    color = Color(0xAA0B0D14),
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = stringResource(R.string.cd_back),
-                        tint = Color.White
-                    )
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("detail_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = stringResource(R.string.cd_back),
+                            tint = Color.White
+                        )
+                    }
+                }
+
+                val successDetail = (uiState as? AnimeDetailUiState.Success)?.detail
+                if (successDetail != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Surface(
+                            color = Color(0xAA0B0D14),
+                            shape = CircleShape,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            IconButton(
+                                onClick = viewModel::toggleFavorite,
+                                modifier = Modifier.testTag("detail_favorite_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                    contentDescription = stringResource(R.string.cd_favorite),
+                                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else Color.White,
+                                    modifier = Modifier.scale(favoriteScale)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            color = Color(0xAA0B0D14),
+                            shape = CircleShape,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    val shareUrl = "${successDetail.provider.baseUrl}/${successDetail.slug}/"
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            "Mira ${successDetail.title} en ${successDetail.provider.displayName}: $shareUrl"
+                                        )
+                                    }
+                                    context.startActivity(
+                                        Intent.createChooser(intent, "Compartir anime")
+                                    )
+                                },
+                                modifier = Modifier.testTag("detail_share_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = stringResource(R.string.cd_share),
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -169,13 +268,19 @@ fun AnimeDetailScreen(
 private fun AnimeDetailContent(
     detail: AnimeDetail,
     episodes: List<EpisodeItem>,
+    episodeQuery: String,
     selectedPage: Int,
     isLoadingEpisodes: Boolean,
     isLoadingMoreEpisodes: Boolean,
     sortDescending: Boolean,
+    isFavorite: Boolean,
     watchedMap: Map<Int, WatchHistoryEntry>,
+    onEpisodeQueryChange: (String) -> Unit,
     onSelectPage: (Int) -> Unit,
     onToggleSort: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onGenreClick: (String) -> Unit,
+    onRetryEpisodes: () -> Unit,
     onPlayEpisode: (Int) -> Unit
 ) {
     var synopsisExpanded by remember { mutableStateOf(false) }
@@ -184,6 +289,18 @@ private fun AnimeDetailContent(
     val primaryEpisode = latestWatched?.episodeNumber
         ?: episodes.firstOrNull()?.number
         ?: 1
+
+    val filteredEpisodes = remember(episodes, episodeQuery) {
+        if (episodeQuery.isBlank()) {
+            episodes
+        } else {
+            episodes.filter { it.number.toString().contains(episodeQuery) }
+        }
+    }
+
+    val isUpcoming = detail.status.contains("estren", ignoreCase = true) ||
+        detail.status.contains("proxim", ignoreCase = true) ||
+        detail.status.contains("upcoming", ignoreCase = true)
 
     LazyColumn(
         modifier = Modifier
@@ -320,7 +437,7 @@ private fun AnimeDetailContent(
             }
         }
 
-        // Primary CTA Button
+        // Primary CTA Row + Mi Lista Button + Clickable Genres + Synopsis
         item {
             Column(
                 modifier = Modifier
@@ -328,33 +445,80 @@ private fun AnimeDetailContent(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Button(
-                    onClick = { onPlayEpisode(primaryEpisode) },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("detail_primary_watch_button")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (latestWatched != null) {
-                            "Continuar Episodio ${latestWatched.episodeNumber}"
-                        } else {
-                            "Ver Episodio $primaryEpisode"
-                        },
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    Button(
+                        onClick = { onPlayEpisode(primaryEpisode) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .testTag("detail_primary_watch_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (latestWatched != null) {
+                                "Continuar Ep. ${latestWatched.episodeNumber}"
+                            } else {
+                                "Ver Episodio $primaryEpisode"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onToggleFavorite,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                        ),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isFavorite) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                            } else {
+                                Color.Transparent
+                            },
+                            contentColor = if (isFavorite) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onBackground
+                            }
+                        ),
+                        modifier = Modifier
+                            .height(50.dp)
+                            .testTag("detail_mylist_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isFavorite) {
+                                stringResource(R.string.my_list_added)
+                            } else {
+                                stringResource(R.string.my_list_add)
+                            },
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
 
-                // Genres
+                // Clickable Genres -> navigates straight to filtered Explore
                 if (detail.genres.isNotEmpty()) {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -363,13 +527,18 @@ private fun AnimeDetailContent(
                         detail.genres.forEach { genre ->
                             Surface(
                                 color = MaterialTheme.colorScheme.surfaceVariant,
-                                shape = RoundedCornerShape(8.dp)
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onGenreClick(genre) }
+                                    .testTag("detail_genre_${genre.lowercase()}")
                             ) {
                                 Text(
                                     text = genre,
                                     style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                 )
                             }
                         }
@@ -406,7 +575,7 @@ private fun AnimeDetailContent(
             }
         }
 
-        // Episodes Header + Pagination Range Tabs
+        // Episodes Header + Episode Number Search + Pagination Range Tabs
         item {
             Spacer(modifier = Modifier.height(14.dp))
             Row(
@@ -446,6 +615,49 @@ private fun AnimeDetailContent(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(if (sortDescending) "Mayor a menor" else "Menor a mayor")
                 }
+            }
+
+            if (detail.episodes.size > 6 || episodeQuery.isNotBlank()) {
+                OutlinedTextField(
+                    value = episodeQuery,
+                    onValueChange = onEpisodeQueryChange,
+                    placeholder = {
+                        Text(
+                            text = stringResource(R.string.detail_episode_filter_placeholder),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    },
+                    singleLine = true,
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    trailingIcon = {
+                        if (episodeQuery.isNotBlank()) {
+                            IconButton(onClick = { onEpisodeQueryChange("") }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Clear,
+                                    contentDescription = "Limpiar filtro de episodio"
+                                )
+                            }
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .testTag("detail_episode_filter_input")
+                )
             }
 
             if (detail.pageRanges.size > 1) {
@@ -490,15 +702,76 @@ private fun AnimeDetailContent(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
+        } else if (filteredEpisodes.isEmpty()) {
+            item {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .testTag("detail_episodes_empty")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = if (episodeQuery.isNotBlank()) {
+                                "No hay episodios que coincidan con \"$episodeQuery\"."
+                            } else {
+                                stringResource(R.string.detail_episodes_empty)
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (episodeQuery.isNotBlank()) {
+                                        onEpisodeQueryChange("")
+                                    } else {
+                                        onRetryEpisodes()
+                                    }
+                                },
+                                modifier = Modifier.height(44.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (episodeQuery.isNotBlank()) "Limpiar filtro" else stringResource(R.string.retry)
+                                )
+                            }
+
+                            if (!isUpcoming && episodeQuery.isBlank()) {
+                                Button(
+                                    onClick = { onPlayEpisode(1) },
+                                    modifier = Modifier.height(44.dp)
+                                ) {
+                                    Text("Probar Episodio 1")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         } else {
-            items(episodes, key = { it.number }) { ep ->
-                val isWatched = watchedMap.containsKey(ep.number)
+            items(filteredEpisodes, key = { it.number }) { ep ->
+                val watchedEntry = watchedMap[ep.number]
                 EpisodeRowItem(
                     episode = ep,
                     fallbackCover = detail.coverUrl,
-                    isWatched = isWatched,
+                    watchedEntry = watchedEntry,
                     onClick = { onPlayEpisode(ep.number) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 5.dp)
+                        .animateItem()
                 )
             }
         }
@@ -528,11 +801,16 @@ private fun StatusPill(
 private fun EpisodeRowItem(
     episode: EpisodeItem,
     fallbackCover: String,
-    isWatched: Boolean,
+    watchedEntry: WatchHistoryEntry?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val thumb = episode.thumbnailUrl.ifBlank { fallbackCover }
+    val isWatched = watchedEntry != null
+    val progress = if (watchedEntry != null && watchedEntry.durationMs > 0L) {
+        (watchedEntry.positionMs.toFloat() / watchedEntry.durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
     Surface(
         shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.surface,
@@ -575,6 +853,17 @@ private fun EpisodeRowItem(
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(18.dp)
+                    )
+                }
+                if (progress > 0f) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = Color.White.copy(alpha = 0.25f),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(3.dp)
                     )
                 }
             }

@@ -38,14 +38,24 @@ class WatchHistoryStore(private val context: Context) {
             } ?: emptyList()
 
             val filtered = current.filterNot {
-                it.animeSlug == entry.animeSlug && it.episodeNumber == entry.episodeNumber
+                it.profileId == entry.profileId &&
+                    it.providerId == entry.providerId &&
+                    it.animeSlug == entry.animeSlug &&
+                    it.episodeNumber == entry.episodeNumber
             }
-            val updated = (listOf(entry) + filtered).take(40)
+            val sameProfileEntries = filtered.filter { it.profileId == entry.profileId }.take(49)
+            val otherProfileEntries = filtered.filter { it.profileId != entry.profileId }
+            val updated = listOf(entry) + sameProfileEntries + otherProfileEntries
             prefs[historyKey] = json.encodeToString(updated)
         }
     }
 
-    suspend fun removeEntry(animeSlug: String, episodeNumber: Int) {
+    suspend fun removeEntry(
+        profileId: String,
+        providerId: String,
+        animeSlug: String,
+        episodeNumber: Int
+    ) {
         context.watchHistoryDataStore.edit { prefs ->
             val current = prefs[historyKey]?.let { raw ->
                 try {
@@ -55,9 +65,26 @@ class WatchHistoryStore(private val context: Context) {
                 }
             } ?: emptyList()
             val updated = current.filterNot {
-                it.animeSlug == animeSlug && it.episodeNumber == episodeNumber
+                it.profileId == profileId &&
+                    it.providerId == providerId &&
+                    it.animeSlug == animeSlug &&
+                    it.episodeNumber == episodeNumber
             }
             prefs[historyKey] = json.encodeToString(updated)
+        }
+    }
+
+    suspend fun clearProfile(profileId: String) {
+        context.watchHistoryDataStore.edit { prefs ->
+            val current = prefs[historyKey]?.let { raw ->
+                try {
+                    json.decodeFromString<List<WatchHistoryEntry>>(raw)
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+            } ?: emptyList()
+            val remaining = current.filterNot { it.profileId == profileId }
+            prefs[historyKey] = json.encodeToString(remaining)
         }
     }
 

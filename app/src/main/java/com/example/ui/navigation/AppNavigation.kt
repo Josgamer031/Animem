@@ -18,9 +18,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Explore
 import androidx.compose.material.icons.rounded.History
@@ -73,12 +75,29 @@ import com.example.ui.screens.ExploreScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.PlayerScreen
+import com.example.ui.screens.ScheduleScreen
 import com.example.ui.viewmodel.AnimeDetailViewModel
 import com.example.ui.viewmodel.ExploreViewModel
 import com.example.ui.viewmodel.HistoryViewModel
 import com.example.ui.viewmodel.HomeViewModel
 import com.example.ui.viewmodel.JkAnimeViewModelFactory
 import com.example.ui.viewmodel.PlayerViewModel
+import com.example.ui.viewmodel.ScheduleViewModel
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.model.UserProfile
+import com.example.ui.screens.LaunchProfileGateScreen
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -86,6 +105,9 @@ object HomeRoute
 
 @Serializable
 object ExploreRoute
+
+@Serializable
+object ScheduleRoute
 
 @Serializable
 object HistoryRoute
@@ -130,6 +152,13 @@ private val TOP_DESTINATIONS = listOf(
         testTag = "nav_explore"
     ),
     TopLevelDestination(
+        route = ScheduleRoute,
+        labelRes = R.string.nav_schedule,
+        selectedIcon = Icons.Rounded.CalendarMonth,
+        unselectedIcon = Icons.Outlined.CalendarMonth,
+        testTag = "nav_schedule"
+    ),
+    TopLevelDestination(
         route = HistoryRoute,
         labelRes = R.string.nav_history,
         selectedIcon = Icons.Rounded.History,
@@ -140,6 +169,65 @@ private val TOP_DESTINATIONS = listOf(
 
 @Composable
 fun KitsuneApp(repository: JkAnimeRepository) {
+    val defaultProfile = remember { UserProfile("default", "Otaku", "kitsune") }
+    val profiles by (repository.profiles ?: flowOf(listOf(defaultProfile)))
+        .collectAsStateWithLifecycle(initialValue = listOf(defaultProfile))
+    val activeProfile by (repository.activeProfile ?: flowOf(defaultProfile))
+        .collectAsStateWithLifecycle(initialValue = defaultProfile)
+    var showLaunchGate by rememberSaveable { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+
+    DisposableEffect(repository) {
+        onDispose {
+            repository.cloudflareBridge.destroy()
+        }
+    }
+
+    AnimatedContent(
+        targetState = showLaunchGate,
+        transitionSpec = {
+            (fadeIn(tween(420)) + scaleIn(initialScale = 0.96f, animationSpec = tween(420))) togetherWith
+                fadeOut(tween(300))
+        },
+        label = "launch_gate_to_app",
+        modifier = Modifier.fillMaxSize()
+    ) { inLaunchGate ->
+        if (inLaunchGate) {
+            LaunchProfileGateScreen(
+                profiles = profiles,
+                activeProfile = activeProfile,
+                onSelectProfile = { profileId ->
+                    scope.launch {
+                        repository.switchProfile(profileId)
+                    }
+                },
+                onCreateProfile = { name, avatarKey ->
+                    scope.launch {
+                        repository.createProfile(name, avatarKey)
+                    }
+                },
+                onUpdateProfile = { profileId, name, avatarKey ->
+                    scope.launch {
+                        repository.updateProfile(profileId, name, avatarKey)
+                    }
+                },
+                onDeleteProfile = { profileId ->
+                    scope.launch {
+                        repository.deleteProfile(profileId)
+                    }
+                },
+                onEnterApp = {
+                    showLaunchGate = false
+                }
+            )
+        } else {
+            KitsuneMainShell(repository = repository)
+        }
+    }
+}
+
+@Composable
+private fun KitsuneMainShell(repository: JkAnimeRepository) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDest = backStackEntry?.destination
@@ -165,15 +253,10 @@ fun KitsuneApp(repository: JkAnimeRepository) {
     val bridgeActive by repository.cloudflareBridge.bridgeActive.collectAsStateWithLifecycle()
     val needsInteractive by repository.cloudflareBridge.needsInteractiveChallenge.collectAsStateWithLifecycle()
 
-    DisposableEffect(repository) {
-        onDispose {
-            repository.cloudflareBridge.destroy()
-        }
-    }
-
     val isTopLevel = currentDest?.let { dest ->
         dest.hasRoute<HomeRoute>() ||
             dest.hasRoute<ExploreRoute>() ||
+            dest.hasRoute<ScheduleRoute>() ||
             dest.hasRoute<HistoryRoute>()
     } ?: true
 
@@ -199,7 +282,11 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 containerColor = MaterialTheme.colorScheme.background,
                 bottomBar = {
-                    if (isTopLevel && !useRail) {
+                    AnimatedVisibility(
+                        visible = isTopLevel && !useRail,
+                        enter = slideInVertically { it } + fadeIn(tween(220)),
+                        exit = slideOutVertically { it } + fadeOut(tween(180))
+                    ) {
                         NavigationBar(
                             containerColor = MaterialTheme.colorScheme.surface,
                             tonalElevation = 4.dp,
@@ -209,6 +296,7 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                                 val selected = when (dest.route) {
                                     is HomeRoute -> currentDest?.hasRoute<HomeRoute>() == true
                                     is ExploreRoute -> currentDest?.hasRoute<ExploreRoute>() == true
+                                    is ScheduleRoute -> currentDest?.hasRoute<ScheduleRoute>() == true
                                     is HistoryRoute -> currentDest?.hasRoute<HistoryRoute>() == true
                                     else -> false
                                 }
@@ -239,7 +327,11 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    if (isTopLevel && useRail) {
+                    AnimatedVisibility(
+                        visible = isTopLevel && useRail,
+                        enter = fadeIn(tween(220)),
+                        exit = fadeOut(tween(180))
+                    ) {
                         NavigationRail(
                             containerColor = MaterialTheme.colorScheme.surface
                         ) {
@@ -247,6 +339,7 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                                 val selected = when (dest.route) {
                                     is HomeRoute -> currentDest?.hasRoute<HomeRoute>() == true
                                     is ExploreRoute -> currentDest?.hasRoute<ExploreRoute>() == true
+                                    is ScheduleRoute -> currentDest?.hasRoute<ScheduleRoute>() == true
                                     is HistoryRoute -> currentDest?.hasRoute<HistoryRoute>() == true
                                     else -> false
                                 }
@@ -274,6 +367,10 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                     NavHost(
                         navController = navController,
                         startDestination = HomeRoute,
+                        enterTransition = { fadeIn(tween(240)) },
+                        exitTransition = { fadeOut(tween(180)) },
+                        popEnterTransition = { fadeIn(tween(220)) },
+                        popExitTransition = { fadeOut(tween(180)) },
                         modifier = Modifier.weight(1f)
                     ) {
                         composable<HomeRoute> {
@@ -308,6 +405,20 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                                 factory = JkAnimeViewModelFactory(repository)
                             )
                             ExploreScreen(
+                                viewModel = vm,
+                                onOpenAnime = { slug, providerId ->
+                                    navController.navigate(AnimeDetailRoute(slug, providerId))
+                                },
+                                onUnlockCloudflare = openCloudflareUnlock,
+                                modifier = Modifier.statusBarsPadding()
+                            )
+                        }
+
+                        composable<ScheduleRoute> {
+                            val vm: ScheduleViewModel = viewModel(
+                                factory = JkAnimeViewModelFactory(repository)
+                            )
+                            ScheduleScreen(
                                 viewModel = vm,
                                 onOpenAnime = { slug, providerId ->
                                     navController.navigate(AnimeDetailRoute(slug, providerId))
@@ -366,6 +477,7 @@ fun KitsuneApp(repository: JkAnimeRepository) {
                                         )
                                     )
                                 },
+                                onNavigateToGenreExplore = { navigateTopLevel(ExploreRoute) },
                                 onUnlockCloudflare = openCloudflareUnlock
                             )
                         }

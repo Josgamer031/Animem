@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,10 +30,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -37,17 +47,24 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
@@ -76,10 +93,14 @@ private val GENRE_OPTIONS = listOf(
     "drama" to "Drama",
     "fantasia" to "Fantasía",
     "romance" to "Romance",
-    "sci-fi" to "Sci-Fi",
+    "sci-fi" to "Ciencia Ficción",
     "seinen" to "Seinen",
     "shounen" to "Shounen",
-    "isekai" to "Isekai"
+    "isekai" to "Isekai",
+    "sobrenatural" to "Sobrenatural",
+    "misterio" to "Misterio",
+    "deportes" to "Deportes",
+    "escolar" to "Escolar"
 )
 
 @Composable
@@ -91,24 +112,117 @@ fun ExploreScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    var filtersExpanded by rememberSaveable { mutableStateOf(true) }
+
+    val isJkAnime = state.filter.provider == AnimeProvider.JKANIME
+    val activeFilterCount = if (isJkAnime) {
+        listOf(state.filter.genre).count { it.isNotBlank() }
+    } else {
+        listOf(
+            state.filter.status,
+            state.filter.type,
+            state.filter.genre
+        ).count { it.isNotBlank() }
+    }
+
+    val hasActiveFilters = activeFilterCount > 0 || state.filter.query.isNotBlank()
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Search Header
+        // Atmospheric Search Header
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            MaterialTheme.colorScheme.background
+                        )
+                    )
+                )
                 .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                text = stringResource(R.string.nav_explore),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = stringResource(R.string.nav_explore),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Catálogo completo · ${state.filter.provider.displayName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    onClick = { filtersExpanded = !filtersExpanded },
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (activeFilterCount > 0) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                    border = BorderStroke(
+                        1.dp,
+                        if (activeFilterCount > 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        }
+                    ),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("explore_toggle_filters")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Tune,
+                            contentDescription = "Filtros",
+                            tint = if (activeFilterCount > 0) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = if (activeFilterCount > 0) "Filtros ($activeFilterCount)" else "Filtros",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (activeFilterCount > 0) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            }
+                        )
+                        Icon(
+                            imageVector = if (filtersExpanded) {
+                                Icons.Rounded.KeyboardArrowUp
+                            } else {
+                                Icons.Rounded.KeyboardArrowDown
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -130,7 +244,9 @@ fun ExploreScreen(
                         label = {
                             Text(
                                 text = "${provider.displayName} · ${provider.shortLabel}",
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
@@ -152,6 +268,7 @@ fun ExploreScreen(
                         ),
                         modifier = Modifier
                             .weight(1f)
+                            .height(42.dp)
                             .testTag("explore_provider_${provider.id}")
                     )
                 }
@@ -178,7 +295,8 @@ fun ExploreScreen(
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.Search,
-                            contentDescription = null
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     },
                     trailingIcon = {
@@ -221,64 +339,239 @@ fun ExploreScreen(
                         viewModel.submitSearch()
                     },
                     shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    ),
                     modifier = Modifier
                         .height(54.dp)
                         .testTag("explore_search_button")
                 ) {
-                    Text(text = stringResource(R.string.cd_search))
+                    Text(
+                        text = stringResource(R.string.cd_search),
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
 
-        // Filter Chips
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // Structured Filter Panel
+        AnimatedVisibility(
+            visible = filtersExpanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
         ) {
-            items(STATUS_OPTIONS) { (key, label) ->
-                val selected = state.filter.status == key
-                FilterChip(
-                    selected = selected,
-                    onClick = { viewModel.selectStatus(key) },
-                    label = { Text(label) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                )
-            }
-            items(TYPE_OPTIONS) { (key, label) ->
-                val selected = state.filter.type == key
-                FilterChip(
-                    selected = selected,
-                    onClick = { viewModel.selectType(key) },
-                    label = { Text(label) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
-                    )
-                )
-            }
-            items(GENRE_OPTIONS) { (key, label) ->
-                val selected = state.filter.genre == key
-                FilterChip(
-                    selected = selected,
-                    onClick = { viewModel.selectGenre(key) },
-                    label = { Text(label) }
-                )
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (!isJkAnime) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "ESTADO Y FORMATO",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (hasActiveFilters) {
+                                TextButton(
+                                    onClick = viewModel::clearAllFilters,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("explore_clear_filters")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Clear,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.clear_filters),
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(STATUS_OPTIONS) { (key, label) ->
+                                val selected = state.filter.status == key
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { viewModel.selectStatus(key) },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                    ),
+                                    modifier = Modifier.testTag("filter_status_$key")
+                                )
+                            }
+                            items(TYPE_OPTIONS) { (key, label) ->
+                                val selected = state.filter.type == key
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { viewModel.selectType(key) },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.secondary,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
+                                    ),
+                                    modifier = Modifier.testTag("filter_type_$key")
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "GÉNEROS",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (isJkAnime && hasActiveFilters) {
+                            TextButton(
+                                onClick = viewModel::clearAllFilters,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("explore_clear_filters")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Clear,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = stringResource(R.string.clear_filters),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            }
+                        }
+                    }
+
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(GENRE_OPTIONS) { (key, label) ->
+                            val selected = state.filter.genre == key
+                            FilterChip(
+                                selected = selected,
+                                onClick = { viewModel.selectGenre(key) },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f),
+                                    selectedLabelColor = MaterialTheme.colorScheme.tertiary
+                                ),
+                                modifier = Modifier.testTag("filter_genre_$key")
+                            )
+                        }
+                    }
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        // Results Summary Bar
+        if (!state.isLoading && state.items.isNotEmpty()) {
+            val activeSummary = buildList {
+                if (!isJkAnime) {
+                    STATUS_OPTIONS.firstOrNull { it.first == state.filter.status }?.second?.let(::add)
+                    TYPE_OPTIONS.firstOrNull { it.first == state.filter.type }?.second?.let(::add)
+                }
+                GENRE_OPTIONS.firstOrNull { it.first == state.filter.genre }?.second?.let(::add)
+            }.joinToString(" · ")
 
-        // Results
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${state.items.size} títulos encontrados",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (activeSummary.isNotBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(999.dp)
+                    ) {
+                        Text(
+                            text = activeSummary,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        } else {
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+
+        // Results Grid / States
         when {
             state.isLoading && state.items.isEmpty() -> {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            text = "Buscando en ${state.filter.provider.displayName}…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             state.errorMessage != null && state.items.isEmpty() -> {
@@ -312,13 +605,23 @@ fun ExploreScreen(
                             title = stringResource(R.string.empty_search_title),
                             subtitle = stringResource(R.string.empty_search_subtitle)
                         )
-                        OutlinedButton(
-                            onClick = { viewModel.searchOrFilter(resetPage = true) },
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("explore_empty_retry_button")
-                        ) {
-                            Text(text = stringResource(R.string.retry))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (hasActiveFilters) {
+                                OutlinedButton(
+                                    onClick = viewModel::clearAllFilters,
+                                    modifier = Modifier.height(48.dp)
+                                ) {
+                                    Text(text = stringResource(R.string.clear_filters))
+                                }
+                            }
+                            Button(
+                                onClick = { viewModel.searchOrFilter(resetPage = true) },
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("explore_empty_retry_button")
+                            ) {
+                                Text(text = stringResource(R.string.retry))
+                            }
                         }
                     }
                 }
@@ -328,16 +631,17 @@ fun ExploreScreen(
                     columns = GridCells.Adaptive(136.dp),
                     contentPadding = PaddingValues(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(state.items, key = { "${it.provider.id}_${it.slug}" }) { anime ->
                         AnimePosterCard(
                             title = anime.title,
                             coverUrl = anime.coverUrl,
-                            badge = anime.type.ifBlank { anime.provider.badgeText },
-                            subtitle = anime.episodeBadge.ifBlank { anime.provider.shortLabel },
+                            badge = anime.type.ifBlank { anime.status.ifBlank { anime.provider.badgeText } },
+                            subtitle = anime.episodeBadge.ifBlank { anime.status.ifBlank { anime.provider.shortLabel } },
                             onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                            modifier = Modifier.animateItem(),
                             testTag = "explore_card_${anime.slug}"
                         )
                     }

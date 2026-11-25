@@ -40,6 +40,11 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
         viewModelScope.launch {
             repository.selectedProvider
                 .collect { provider ->
+                    val pending = repository.pendingExploreGenre.value
+                    if (pending != null && pending.first == provider) {
+                        // Let pendingExploreGenre collector trigger the filtered fetch cleanly
+                        return@collect
+                    }
                     _uiState.update {
                         it.copy(
                             filter = DirectoryFilter(provider = provider, query = it.filter.query),
@@ -51,6 +56,31 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
                     }
                     searchOrFilter(resetPage = true)
                 }
+        }
+        viewModelScope.launch {
+            repository.pendingExploreGenre.collect { pending ->
+                if (pending != null) {
+                    val (provider, genreSlug) = pending
+                    _uiState.update {
+                        it.copy(
+                            filter = DirectoryFilter(
+                                provider = provider,
+                                query = "",
+                                status = "",
+                                type = "",
+                                genre = genreSlug,
+                                page = 1
+                            ),
+                            items = emptyList(),
+                            hasNextPage = false,
+                            errorMessage = null,
+                            blockedUrl = null
+                        )
+                    }
+                    repository.consumePendingExploreGenre()
+                    searchOrFilter(resetPage = true)
+                }
+            }
         }
     }
 
@@ -68,20 +98,30 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     }
 
     fun selectStatus(status: String) {
+        if (_uiState.value.filter.provider == AnimeProvider.JKANIME) return
         val next = if (_uiState.value.filter.status == status) "" else status
-        _uiState.update { it.copy(filter = it.filter.copy(status = next, query = "")) }
+        _uiState.update { it.copy(filter = it.filter.copy(status = next)) }
         searchOrFilter(resetPage = true)
     }
 
     fun selectType(type: String) {
+        if (_uiState.value.filter.provider == AnimeProvider.JKANIME) return
         val next = if (_uiState.value.filter.type == type) "" else type
-        _uiState.update { it.copy(filter = it.filter.copy(type = next, query = "")) }
+        _uiState.update { it.copy(filter = it.filter.copy(type = next)) }
         searchOrFilter(resetPage = true)
     }
 
     fun selectGenre(genre: String) {
         val next = if (_uiState.value.filter.genre == genre) "" else genre
-        _uiState.update { it.copy(filter = it.filter.copy(genre = next, query = "")) }
+        _uiState.update {
+            it.copy(
+                filter = it.filter.copy(
+                    genre = next,
+                    status = if (it.filter.provider == AnimeProvider.JKANIME) "" else it.filter.status,
+                    type = if (it.filter.provider == AnimeProvider.JKANIME) "" else it.filter.type
+                )
+            )
+        }
         searchOrFilter(resetPage = true)
     }
 

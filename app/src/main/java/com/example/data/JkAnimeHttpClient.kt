@@ -42,6 +42,9 @@ class JkAnimeHttpClient {
     @Volatile
     var webRenderedHandler: (suspend (url: String, referer: String, hasRenderedContent: (String) -> Boolean) -> String?)? = null
 
+    @Volatile
+    var webSniffHandler: (suspend (url: String, referer: String) -> Pair<String, Map<String, String>>?)? = null
+
     fun updateBaseUrl(newUrl: String) {
         val cleaned = newUrl.trim().trimEnd('/')
         if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
@@ -75,6 +78,7 @@ class JkAnimeHttpClient {
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
+        .retryOnConnectionFailure(true)
         .followRedirects(true)
         .followSslRedirects(true)
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -84,6 +88,7 @@ class JkAnimeHttpClient {
 
     private val http11Client: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
+        .retryOnConnectionFailure(true)
         .protocols(listOf(Protocol.HTTP_1_1))
         .followRedirects(true)
         .followSslRedirects(true)
@@ -180,6 +185,13 @@ class JkAnimeHttpClient {
         webRenderedHandler?.invoke(url, referer, hasRenderedContent)
     }
 
+    suspend fun sniffDirectMediaUrl(
+        url: String,
+        referer: String = ""
+    ): Pair<String, Map<String, String>>? = withContext(Dispatchers.IO) {
+        webSniffHandler?.invoke(url, referer)
+    }
+
     private data class HttpAttempt(
         val statusCode: Int,
         val isSuccessful: Boolean,
@@ -249,30 +261,161 @@ class JkAnimeHttpClient {
 
     suspend fun fetchJsonOrText(url: String, referer: String = "$BASE_URL/"): String =
         withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", activeUserAgent)
-                .header("Accept", "application/json, text/javascript, */*; q=0.01")
-                .header("X-Requested-With", "XMLHttpRequest")
-                .header("Referer", referer)
-                .build()
+            consumeUnlockedHtml(url)?.let { return@withContext it }
 
-            okHttpClient.newCall(request).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (response.code in listOf(403, 429, 503) || isCloudflareHtml(text)) {
-                    webFetchHandler?.invoke(url, referer)?.let { bridged ->
-                        if (bridged.isNotBlank() && !isCloudflareHtml(bridged)) {
-                            return@withContext bridged
-                        }
+            fun executeAjaxGet(client: OkHttpClient, userAgent: String): Pair<Int, String> {
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", userAgent)
+                    .header("Accept", "application/json, text/javascript, */*; q=0.01")
+                    .header("X-Requested-With", "XMLHttpRequest")
+                    .header("Referer", referer)
+                    .build()
+                return client.newCall(request).execute().use { response ->
+                    response.code to response.body?.string().orEmpty()
+                }
+            }
+
+            val (code1, text1) = executeAjaxGet(okHttpClient, activeUserAgent)
+            val blocked1 = code1 in listOf(403, 429, 503) || isCloudflareHtml(text1)
+            if (!blocked1 && (code1 in 200..299 || text1.isNotBlank())) {
+                return@withContext text1
+            }
+
+            val (code2, text2) = executeAjaxGet(http11Client, DESKTOP_UA)
+            val blocked2 = code2 in listOf(403, 429, 503) || isCloudflareHtml(text2)
+            if (!blocked2 && (code2 in 200..299 || text2.isNotBlank())) {
+                return@withContext text2
+            }
+
+            if (blocked2) {
+                webFetchHandler?.invoke(url, referer)?.let { bridged ->
+                    if (bridged.isNotBlank() && !isCloudflareHtml(bridged)) {
+                        return@withContext bridged
                     }
-                    throw CloudflareBlockedException(url, response.code)
                 }
-                if (!response.isSuccessful && text.isBlank()) {
-                    throw IOException("HTTP ${response.code} en $url")
+                throw CloudflareBlockedException(url, code2)
+            }
+
+            if (text2.isBlank()) {
+                throw IOException("HTTP $code2 en $url")
+            }
+            text2
+        }
+
+    data class StreamProbeResult(
+        val finalUrl: String,
+        val isHls: Boolean
+    )
+
+    suspend fun probePlayableStream(
+        url: String,
+        headers: Map<String, String>
+    ): StreamProbeResult? = withContext(Dispatchers.IO) {
+        try {
+            val isLikelyHls = url.contains(".m3u8", ignoreCase = true) ||
+                url.contains("master.txt", ignoreCase = true)
+            val builder = Request.Builder().url(url)
+            if (!isLikelyHls) {
+                builder.header("Range", "bytes=0-1023")
+            }
+            headers.forEach { (k, v) ->
+                if (k.equals("User-Agent", true) ||
+                    k.equals("Referer", true) ||
+                    k.equals("Origin", true) ||
+                    k.equals("Cookie", true)
+                ) {
+                    builder.header(k, v)
                 }
-                text
+            }
+            if (!headers.keys.any { it.equals("User-Agent", true) }) {
+                builder.header("User-Agent", activeUserAgent)
+            }
+
+            okHttpClient.newCall(builder.build()).execute().use { response ->
+                val code = response.code
+                if (code in listOf(404, 410, 451, 500, 502, 503, 504)) {
+                    return@withContext null
+                }
+
+                val finalUrl = response.request.url.toString()
+                val contentType = response.header("Content-Type").orEmpty().lowercase()
+
+                // If CDN rejects probe with 403/405/416 (e.g. strict Range/method checks) on an explicit media URL, allow ExoPlayer to attempt native playback
+                if (code !in 200..299 && code != 206) {
+                    val urlIsExplicitMedia = finalUrl.contains(".m3u8", ignoreCase = true) ||
+                        finalUrl.contains(".mp4", ignoreCase = true) ||
+                        finalUrl.contains(".mpd", ignoreCase = true) ||
+                        finalUrl.contains("master.txt", ignoreCase = true) ||
+                        finalUrl.contains("okcdn.ru", ignoreCase = true)
+                    return@withContext if (urlIsExplicitMedia && !contentType.contains("text/html")) {
+                        StreamProbeResult(
+                            finalUrl = finalUrl,
+                            isHls = finalUrl.contains(".m3u8", ignoreCase = true) ||
+                                finalUrl.contains("master.txt", ignoreCase = true)
+                        )
+                    } else {
+                        null
+                    }
+                }
+
+                val snippetBytes = ByteArray(1024)
+                val readCount = response.body?.byteStream()?.use { stream ->
+                    var total = 0
+                    while (total < snippetBytes.size) {
+                        val n = stream.read(snippetBytes, total, snippetBytes.size - total)
+                        if (n <= 0) break
+                        total += n
+                    }
+                    total
+                } ?: 0
+
+                val headText = if (readCount > 0) {
+                    String(snippetBytes, 0, readCount, Charsets.UTF_8).trimStart('\uFEFF', ' ', '\t', '\r', '\n')
+                } else {
+                    ""
+                }
+                val headLower = headText.lowercase()
+
+                val isHtmlOrJson = contentType.contains("text/html") ||
+                    contentType.contains("application/json") ||
+                    contentType.startsWith("image/") ||
+                    headLower.startsWith("<!doctype") ||
+                    headLower.startsWith("<html") ||
+                    headLower.startsWith("<head") ||
+                    headLower.startsWith("<script") ||
+                    headLower.startsWith("{") ||
+                    isCloudflareHtml(headText)
+
+                if (isHtmlOrJson) {
+                    return@withContext null
+                }
+
+                val isHls = headText.startsWith("#EXTM3U") ||
+                    contentType.contains("mpegurl") ||
+                    finalUrl.contains(".m3u8", ignoreCase = true) ||
+                    finalUrl.contains("master.txt", ignoreCase = true)
+
+                StreamProbeResult(
+                    finalUrl = finalUrl,
+                    isHls = isHls
+                )
+            }
+        } catch (err: Throwable) {
+            val isDnsOrOffline = generateSequence<Throwable>(err) { it.cause }
+                .any { it is java.net.UnknownHostException || it is java.net.ConnectException }
+            if (isDnsOrOffline) {
+                return@withContext null
+            }
+            val fallbackHls = url.contains(".m3u8", ignoreCase = true) ||
+                url.contains("master.txt", ignoreCase = true)
+            if (fallbackHls || url.contains(".mp4", ignoreCase = true)) {
+                StreamProbeResult(finalUrl = url, isHls = fallbackHls)
+            } else {
+                null
             }
         }
+    }
 
     fun buildMediaHeaders(referer: String = "$BASE_URL/"): Map<String, String> = mapOf(
         "User-Agent" to activeUserAgent,

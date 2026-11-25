@@ -25,13 +25,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Translate
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,7 +43,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -61,7 +59,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,13 +66,17 @@ import coil.compose.AsyncImage
 import com.example.R
 import com.example.model.AnimeProvider
 import com.example.model.AnimeSummary
+import com.example.model.FavoriteAnime
 import com.example.model.HomeFeed
+import com.example.model.UserProfile
 import com.example.model.WatchHistoryEntry
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.ErrorStateView
 import com.example.ui.components.HomeLoadingSkeleton
 import com.example.ui.components.LatestEpisodeCard
+import com.example.ui.components.ProfileSwitcherDialog
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.profileAvatarDrawable
 import com.example.ui.viewmodel.HomeUiState
 import com.example.ui.viewmodel.HomeViewModel
 
@@ -93,83 +94,26 @@ fun HomeScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val selectedProvider by viewModel.selectedProvider.collectAsStateWithLifecycle()
     val continueWatching by viewModel.continueWatching.collectAsStateWithLifecycle()
-    var showAvatarDialog by remember { mutableStateOf(false) }
+    val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+    val profiles by viewModel.profiles.collectAsStateWithLifecycle()
+    val activeProfile by viewModel.activeProfile.collectAsStateWithLifecycle()
+    var showProfileDialog by remember { mutableStateOf(false) }
 
-    if (showAvatarDialog) {
-        AlertDialog(
-            onDismissRequest = { showAvatarDialog = false },
-            containerColor = MaterialTheme.colorScheme.surface,
-            title = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.img_kitsune_avatar_1795551386599),
-                        contentDescription = stringResource(R.string.cd_app_avatar),
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(88.dp)
-                            .clip(CircleShape)
-                            .border(
-                                2.dp,
-                                Brush.linearGradient(
-                                    listOf(
-                                        MaterialTheme.colorScheme.primary,
-                                        MaterialTheme.colorScheme.secondary
-                                    )
-                                ),
-                                CircleShape
-                            )
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "JKAnime (Sub) · Latanime (Latino)",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+    if (showProfileDialog) {
+        ProfileSwitcherDialog(
+            profiles = profiles,
+            activeProfile = activeProfile,
+            onSelectProfile = viewModel::switchProfile,
+            onCreateProfile = viewModel::createProfile,
+            onUpdateProfile = viewModel::updateProfile,
+            onDeleteProfile = viewModel::deleteProfile,
+            onOpenCloudflareConfig = {
+                showProfileDialog = false
+                onUnlockCloudflare("${selectedProvider.baseUrl}/") {
+                    viewModel.loadHome(isRefresh = true, provider = selectedProvider)
                 }
             },
-            text = {
-                Text(
-                    text = "Catálogo en HD con anime subtitulado desde JKAnime y doblado en español latino desde Latanime, con reproductor nativo y respaldo web.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showAvatarDialog = false },
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Listo")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showAvatarDialog = false
-                        onUnlockCloudflare("${selectedProvider.baseUrl}/") {
-                            viewModel.loadHome(isRefresh = true, provider = selectedProvider)
-                        }
-                    }
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Shield,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Configurar conexión")
-                }
-            }
+            onDismiss = { showProfileDialog = false }
         )
     }
 
@@ -178,17 +122,31 @@ fun HomeScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        HomeTopHeader(
-            selectedProvider = selectedProvider,
-            onAvatarClick = { showAvatarDialog = true },
-            onSearchClick = onOpenSearch,
-            onRefreshClick = { viewModel.loadHome(isRefresh = true, provider = selectedProvider) }
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            MaterialTheme.colorScheme.background
+                        )
+                    )
+                )
+        ) {
+            HomeTopHeader(
+                selectedProvider = selectedProvider,
+                activeProfile = activeProfile,
+                onAvatarClick = { showProfileDialog = true },
+                onSearchClick = onOpenSearch,
+                onRefreshClick = { viewModel.loadHome(isRefresh = true, provider = selectedProvider) }
+            )
 
-        ProviderSwitcherBar(
-            selectedProvider = selectedProvider,
-            onSelectProvider = viewModel::selectProvider
-        )
+            ProviderSwitcherBar(
+                selectedProvider = selectedProvider,
+                onSelectProvider = viewModel::selectProvider
+            )
+        }
 
         PullToRefreshBox(
             isRefreshing = isRefreshing,
@@ -219,6 +177,7 @@ fun HomeScreen(
                     HomeFeedContent(
                         feed = state.feed,
                         continueWatching = continueWatching,
+                        favorites = favorites,
                         onOpenAnime = onOpenAnime,
                         onPlayEpisode = onPlayEpisode
                     )
@@ -231,6 +190,7 @@ fun HomeScreen(
 @Composable
 private fun HomeTopHeader(
     selectedProvider: AnimeProvider,
+    activeProfile: UserProfile,
     onAvatarClick: () -> Unit,
     onSearchClick: () -> Unit,
     onRefreshClick: () -> Unit
@@ -247,11 +207,11 @@ private fun HomeTopHeader(
             modifier = Modifier
                 .clip(RoundedCornerShape(24.dp))
                 .clickable(onClick = onAvatarClick)
-                .padding(end = 8.dp)
+                .padding(end = 8.dp, top = 2.dp, bottom = 2.dp)
                 .testTag("home_avatar_button")
         ) {
             Image(
-                painter = painterResource(id = R.drawable.img_kitsune_avatar_1795551386599),
+                painter = painterResource(id = profileAvatarDrawable(activeProfile.avatarKey)),
                 contentDescription = stringResource(R.string.cd_app_avatar),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -270,13 +230,22 @@ private fun HomeTopHeader(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "Cambiar perfil",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
                 Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "${selectedProvider.displayName} · ${selectedProvider.shortLabel}",
+                    text = "${activeProfile.name} · ${selectedProvider.displayName}",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (selectedProvider == AnimeProvider.LATANIME) {
                         MaterialTheme.colorScheme.secondary
@@ -287,26 +256,40 @@ private fun HomeTopHeader(
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            IconButton(
-                onClick = onSearchClick,
-                modifier = Modifier.testTag("home_search_button")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                shape = CircleShape
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = stringResource(R.string.cd_search),
-                    tint = MaterialTheme.colorScheme.onBackground
-                )
+                IconButton(
+                    onClick = onSearchClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("home_search_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = stringResource(R.string.cd_search),
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
             }
-            IconButton(
-                onClick = onRefreshClick,
-                modifier = Modifier.testTag("home_refresh_button")
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                shape = CircleShape
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Refresh,
-                    contentDescription = stringResource(R.string.cd_refresh),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                IconButton(
+                    onClick = onRefreshClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("home_refresh_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = stringResource(R.string.cd_refresh),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -374,6 +357,7 @@ private fun ProviderSwitcherBar(
 private fun HomeFeedContent(
     feed: HomeFeed,
     continueWatching: List<WatchHistoryEntry>,
+    favorites: List<FavoriteAnime>,
     onOpenAnime: (slug: String, providerId: String) -> Unit,
     onPlayEpisode: (slug: String, episode: Int, title: String, coverUrl: String, providerId: String, episodeUrl: String) -> Unit
 ) {
@@ -418,6 +402,36 @@ private fun HomeFeedContent(
                                         entry.episodeUrl
                                     )
                                 }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (favorites.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(
+                        title = stringResource(R.string.my_list_title),
+                        accentLabel = "${favorites.size}"
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(
+                            items = favorites.take(12),
+                            key = { "fav_${it.profileId}_${it.providerId}_${it.animeSlug}" }
+                        ) { fav ->
+                            AnimePosterCard(
+                                title = fav.animeTitle,
+                                coverUrl = fav.coverUrl,
+                                badge = fav.type.ifBlank { AnimeProvider.fromId(fav.providerId).badgeText },
+                                subtitle = fav.status.ifBlank { fav.totalEpisodesText },
+                                onClick = { onOpenAnime(fav.animeSlug, fav.providerId) },
+                                modifier = Modifier.width(142.dp),
+                                testTag = "home_fav_card_${fav.animeSlug}"
                             )
                         }
                     }
@@ -494,7 +508,10 @@ private fun HomeFeedContent(
         if (feed.recentAdded.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SectionHeader(title = stringResource(R.string.section_recent_animes))
+                    SectionHeader(
+                        title = stringResource(R.string.section_recent_animes),
+                        accentLabel = "${feed.recentAdded.size}"
+                    )
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -535,8 +552,18 @@ private fun FeaturedHeroCarousel(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(244.dp)
+                    .height(268.dp)
                     .clip(MaterialTheme.shapes.large)
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.22f),
+                                MaterialTheme.colorScheme.outlineVariant
+                            )
+                        ),
+                        shape = MaterialTheme.shapes.large
+                    )
                     .clickable { onOpenAnime(anime.slug, anime.provider.id) }
                     .testTag("hero_card_${anime.slug}")
             ) {
@@ -561,9 +588,9 @@ private fun FeaturedHeroCarousel(
                         .background(
                             Brush.verticalGradient(
                                 colorStops = arrayOf(
-                                    0.0f to Color(0x330B0D14),
-                                    0.45f to Color(0x880B0D14),
-                                    1.0f to Color(0xF20B0D14)
+                                    0.0f to Color(0x280B0D14),
+                                    0.42f to Color(0x880B0D14),
+                                    1.0f to Color(0xF60B0D14)
                                 )
                             )
                         )
