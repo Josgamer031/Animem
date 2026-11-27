@@ -4,10 +4,11 @@
     android:layout_height="match_parent"
     android:background="@drawable/widget_kitsune_bg"
     android:orientation="vertical"
-    android:padding="14dp">
+    android:padding="12dp">
 
     <!-- Header Row -->
     <LinearLayout
+        android:id="@+id/widget_header_row"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
@@ -19,9 +20,10 @@
             android:layout_height="22dp"
             android:contentDescription="@string/app_name"
             android:src="@drawable/ic_stat_kitsune"
-            android:tint="#FFFF4D6D" />
+            android:tint="#FFFF3B5C" />
 
         <LinearLayout
+            android:id="@+id/widget_header_title_group"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
@@ -47,25 +49,44 @@
                 android:maxLines="1"
                 android:text="Perfil: Otaku"
                 android:textColor="#FFA8B2C8"
-                android:textSize="11sp" />
+                android:textSize="10.5sp" />
         </LinearLayout>
 
-        <TextView
+        <!-- Quick Action Icon Buttons -->
+        <ImageView
+            android:id="@+id/widget_search_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/widget_icon_btn_bg"
+            android:contentDescription="@string/widget_quick_search"
+            android:padding="7dp"
+            android:src="@drawable/ic_widget_search"
+            android:tint="#FFE2E8F5" />
+
+        <ImageView
+            android:id="@+id/widget_schedule_btn"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/widget_icon_btn_bg"
+            android:contentDescription="@string/widget_quick_schedule"
+            android:padding="7dp"
+            android:src="@drawable/ic_widget_calendar"
+            android:tint="#FFE2E8F5" />
+
+        <ImageView
             android:id="@+id/widget_refresh_btn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/widget_card_bg"
-            android:paddingStart="10dp"
-            android:paddingTop="6dp"
-            android:paddingEnd="10dp"
-            android:paddingBottom="6dp"
-            android:text="@string/widget_refresh"
-            android:textColor="#FF00D2FF"
-            android:textSize="11sp"
-            android:textStyle="bold" />
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:background="@drawable/widget_icon_btn_bg"
+            android:contentDescription="@string/widget_refresh"
+            android:padding="7dp"
+            android:src="@drawable/ic_widget_refresh"
+            android:tint="#FF38BDF8" />
     </LinearLayout>
 
-    <!-- Continue Watching Card -->
+    <!-- Hero Continue Watching Card -->
     <LinearLayout
         android:id="@+id/widget_continue_card"
         android:layout_width="match_parent"
@@ -81,6 +102,15 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
+            <ImageView
+                android:id="@+id/widget_continue_cover"
+                android:layout_width="44dp"
+                android:layout_height="62dp"
+                android:layout_marginEnd="10dp"
+                android:contentDescription="@string/section_continue_watching"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_widget_poster_placeholder" />
+
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
@@ -91,8 +121,10 @@
                     android:id="@+id/widget_continue_kicker"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
                     android:text="@string/section_continue_watching"
-                    android:textColor="#FFFF4D6D"
+                    android:textColor="#FFFF3B5C"
                     android:textSize="10sp"
                     android:textStyle="bold" />
 
@@ -105,175 +137,259 @@
                     android:maxLines="1"
                     android:text="@string/widget_no_history"
                     android:textColor="#FFFFFFFF"
-                    android:textSize="13sp"
+                    android:textSize="13.5sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/widget_continue_subtitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="1dp"
                     android:ellipsize="end"
                     android:maxLines="1"
-                    android:text=""
+                    android:text="@string/widget_tap_to_explore"
                     android:textColor="#FFB4BDD0"
                     android:textSize="11sp" />
             </LinearLayout>
 
-            <TextView
+            <LinearLayout
                 android:id="@+id/widget_resume_btn"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
-                android:background="#FFFF4D6D"
-                android:paddingStart="10dp"
+                android:background="@drawable/widget_pill_crimson"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="9dp"
                 android:paddingTop="6dp"
-                android:paddingEnd="10dp"
-                android:paddingBottom="6dp"
-                android:text="@string/widget_resume"
-                android:textColor="#FFFFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:paddingEnd="11dp"
+                android:paddingBottom="6dp">
+
+                <ImageView
+                    android:layout_width="13dp"
+                    android:layout_height="13dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_widget_play" />
+
+                <TextView
+                    android:id="@+id/widget_resume_btn_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="3dp"
+                    android:text="@string/widget_resume"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
         </LinearLayout>
 
         <ProgressBar
             android:id="@+id/widget_continue_progress"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="4dp"
+            android:layout_height="4.5dp"
             android:layout_marginTop="8dp"
             android:max="100"
             android:progress="0"
-            android:progressBackgroundTint="#33FFFFFF"
-            android:progressTint="#FFFF4D6D" />
+            android:progressDrawable="@drawable/widget_progress_drawable" />
     </LinearLayout>
 
-    <!-- Premieres Section Header -->
-    <TextView
-        android:id="@+id/widget_premieres_header"
+    <!-- Premieres Section -->
+    <LinearLayout
+        android:id="@+id/widget_premieres_section"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="10dp"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:text="@string/widget_premieres_default_header"
-        android:textColor="#FF00D2FF"
-        android:textSize="11sp"
-        android:textStyle="bold" />
+        android:orientation="vertical">
 
-    <!-- Empty premieres fallback -->
-    <TextView
-        android:id="@+id/widget_premieres_empty"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="@string/widget_premieres_empty"
-        android:textColor="#FF9CA6BD"
-        android:textSize="11sp"
-        android:visibility="gone" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-    <!-- Premiere Row 1 -->
-    <LinearLayout
-        android:id="@+id/widget_premiere_row_1"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:background="@drawable/widget_card_bg"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="10dp"
-        android:paddingTop="7dp"
-        android:paddingEnd="10dp"
-        android:paddingBottom="7dp">
+            <TextView
+                android:id="@+id/widget_premieres_header"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/widget_premieres_default_header"
+                android:textColor="#FF38BDF8"
+                android:textSize="11.5sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_premieres_more"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingStart="8dp"
+                android:paddingTop="2dp"
+                android:paddingEnd="2dp"
+                android:paddingBottom="2dp"
+                android:text="@string/widget_see_schedule"
+                android:textColor="#FFA8B2C8"
+                android:textSize="10.5sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <TextView
-            android:id="@+id/widget_premiere_title_1"
-            android:layout_width="0dp"
+            android:id="@+id/widget_premieres_empty"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#FFFFFFFF"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:layout_marginTop="6dp"
+            android:text="@string/widget_premieres_empty"
+            android:textColor="#FF9CA6BD"
+            android:textSize="11sp"
+            android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/widget_premiere_badge_1"
-            android:layout_width="wrap_content"
+        <!-- Premiere Row 1 -->
+        <LinearLayout
+            android:id="@+id/widget_premiere_row_1"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:textColor="#FFA855F7"
-            android:textSize="10sp"
-            android:textStyle="bold" />
-    </LinearLayout>
+            android:layout_marginTop="6dp"
+            android:background="@drawable/widget_card_bg"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="9dp"
+            android:paddingBottom="5dp">
 
-    <!-- Premiere Row 2 -->
-    <LinearLayout
-        android:id="@+id/widget_premiere_row_2"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
-        android:background="@drawable/widget_card_bg"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="10dp"
-        android:paddingTop="7dp"
-        android:paddingEnd="10dp"
-        android:paddingBottom="7dp">
+            <ImageView
+                android:id="@+id/widget_premiere_cover_1"
+                android:layout_width="24dp"
+                android:layout_height="34dp"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_widget_poster_placeholder" />
 
-        <TextView
-            android:id="@+id/widget_premiere_title_2"
-            android:layout_width="0dp"
+            <TextView
+                android:id="@+id/widget_premiere_title_1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_premiere_badge_1"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/widget_badge_bg"
+                android:paddingStart="7dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="7dp"
+                android:paddingBottom="3dp"
+                android:textColor="#FFFFB84D"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Premiere Row 2 -->
+        <LinearLayout
+            android:id="@+id/widget_premiere_row_2"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#FFFFFFFF"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:layout_marginTop="5dp"
+            android:background="@drawable/widget_card_bg"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="9dp"
+            android:paddingBottom="5dp">
 
-        <TextView
-            android:id="@+id/widget_premiere_badge_2"
-            android:layout_width="wrap_content"
+            <ImageView
+                android:id="@+id/widget_premiere_cover_2"
+                android:layout_width="24dp"
+                android:layout_height="34dp"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_widget_poster_placeholder" />
+
+            <TextView
+                android:id="@+id/widget_premiere_title_2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_premiere_badge_2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/widget_badge_bg"
+                android:paddingStart="7dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="7dp"
+                android:paddingBottom="3dp"
+                android:textColor="#FFFFB84D"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Premiere Row 3 -->
+        <LinearLayout
+            android:id="@+id/widget_premiere_row_3"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:textColor="#FFA855F7"
-            android:textSize="10sp"
-            android:textStyle="bold" />
-    </LinearLayout>
+            android:layout_marginTop="5dp"
+            android:background="@drawable/widget_card_bg"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="9dp"
+            android:paddingBottom="5dp">
 
-    <!-- Premiere Row 3 -->
-    <LinearLayout
-        android:id="@+id/widget_premiere_row_3"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
-        android:background="@drawable/widget_card_bg"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="10dp"
-        android:paddingTop="7dp"
-        android:paddingEnd="10dp"
-        android:paddingBottom="7dp">
+            <ImageView
+                android:id="@+id/widget_premiere_cover_3"
+                android:layout_width="24dp"
+                android:layout_height="34dp"
+                android:layout_marginEnd="8dp"
+                android:contentDescription="@null"
+                android:scaleType="centerCrop"
+                android:src="@drawable/ic_widget_poster_placeholder" />
 
-        <TextView
-            android:id="@+id/widget_premiere_title_3"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="#FFFFFFFF"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            <TextView
+                android:id="@+id/widget_premiere_title_3"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/widget_premiere_badge_3"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:textColor="#FFA855F7"
-            android:textSize="10sp"
-            android:textStyle="bold" />
+            <TextView
+                android:id="@+id/widget_premiere_badge_3"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/widget_badge_bg"
+                android:paddingStart="7dp"
+                android:paddingTop="3dp"
+                android:paddingEnd="7dp"
+                android:paddingBottom="3dp"
+                android:textColor="#FFFFB84D"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
     </LinearLayout>
 
 </LinearLayout>

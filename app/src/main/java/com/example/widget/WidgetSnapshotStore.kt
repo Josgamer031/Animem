@@ -2,6 +2,7 @@ package com.example.widget
 
 import android.content.Context
 import com.example.model.AnimeProvider
+import com.example.model.AppColorTheme
 import com.example.model.LatestEpisode
 import com.example.model.ScheduleItem
 import com.example.model.WatchHistoryEntry
@@ -17,7 +18,10 @@ data class WidgetPremiereItem(
     val slug: String,
     val title: String,
     val providerId: String,
-    val badge: String
+    val badge: String,
+    val coverUrl: String = "",
+    val episodeNumber: Int = 0,
+    val episodeUrl: String = ""
 )
 
 @Serializable
@@ -32,8 +36,13 @@ data class WidgetSnapshot(
     val continueProgressPercent: Int = 0,
     val todayDayLabel: String = "Estrenos de hoy",
     val todayPremieres: List<WidgetPremiereItem> = emptyList(),
-    val updatedAtLabel: String = ""
-)
+    val updatedAtLabel: String = "",
+    val colorThemeName: String = AppColorTheme.KITSUNE_RED.name,
+    val amoledBlack: Boolean = false
+) {
+    fun resolvedColorTheme(): AppColorTheme =
+        AppColorTheme.entries.firstOrNull { it.name == colorThemeName } ?: AppColorTheme.KITSUNE_RED
+}
 
 object WidgetSnapshotStore {
     private const val PREFS_NAME = "kitsune_widget_snapshot"
@@ -50,7 +59,11 @@ object WidgetSnapshotStore {
         }
     }
 
-    fun update(context: Context, transform: (WidgetSnapshot) -> WidgetSnapshot) {
+    fun update(
+        context: Context,
+        prefetchCovers: Boolean = true,
+        transform: (WidgetSnapshot) -> WidgetSnapshot
+    ) {
         val appContext = context.applicationContext
         val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val current = load(appContext)
@@ -59,6 +72,22 @@ object WidgetSnapshotStore {
         )
         prefs.edit().putString(KEY_SNAPSHOT_JSON, json.encodeToString(updated)).apply()
         KitsuneHomeWidgetProvider.requestUpdateAll(appContext)
+        if (prefetchCovers) {
+            WidgetBitmapCache.prefetchForSnapshotAsync(appContext, updated)
+        }
+    }
+
+    fun updateTheme(
+        context: Context,
+        colorTheme: AppColorTheme? = null,
+        amoledBlack: Boolean? = null
+    ) {
+        update(context, prefetchCovers = false) { current ->
+            current.copy(
+                colorThemeName = colorTheme?.name ?: current.colorThemeName,
+                amoledBlack = amoledBlack ?: current.amoledBlack
+            )
+        }
     }
 
     fun updateContinueWatching(
@@ -73,6 +102,7 @@ object WidgetSnapshotStore {
                     continueSlug = "",
                     continueTitle = "",
                     continueEpisodeNumber = 0,
+                    continueCoverUrl = "",
                     continueProgressPercent = 0
                 )
             } else {
@@ -100,12 +130,15 @@ object WidgetSnapshotStore {
         episodes: List<LatestEpisode>
     ) {
         if (episodes.isEmpty()) return
-        val items = episodes.take(3).map { ep ->
+        val items = episodes.take(4).map { ep ->
             WidgetPremiereItem(
                 slug = ep.animeSlug,
                 title = ep.animeTitle,
                 providerId = ep.provider.id,
-                badge = ep.episodeLabel.ifBlank { "Ep. ${ep.episodeNumber}" }
+                badge = ep.episodeLabel.ifBlank { "Ep. ${ep.episodeNumber}" },
+                coverUrl = ep.coverUrl,
+                episodeNumber = ep.episodeNumber.coerceAtLeast(1),
+                episodeUrl = ep.episodeUrl
             )
         }
         update(context) { current ->
@@ -122,12 +155,15 @@ object WidgetSnapshotStore {
         scheduleItems: List<ScheduleItem>
     ) {
         if (scheduleItems.isEmpty()) return
-        val items = scheduleItems.take(3).map { item ->
+        val items = scheduleItems.take(4).map { item ->
             WidgetPremiereItem(
                 slug = item.slug,
                 title = item.title,
                 providerId = item.provider.id,
-                badge = item.releaseTime.ifBlank { item.episodeLabel.ifBlank { item.provider.badgeText } }
+                badge = item.releaseTime.ifBlank { item.episodeLabel.ifBlank { item.provider.badgeText } },
+                coverUrl = item.coverUrl,
+                episodeNumber = 0,
+                episodeUrl = ""
             )
         }
         update(context) { current ->

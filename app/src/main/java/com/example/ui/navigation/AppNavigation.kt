@@ -351,6 +351,21 @@ private fun KitsuneMainShell(
                     launchSingleTop = true
                 }
             }
+            is LaunchDeepLink.OpenTab -> {
+                val targetRoute: Any = when (link.tabId) {
+                    com.example.notifications.DeepLinkIntentHelper.TAB_EXPLORE -> ExploreRoute
+                    com.example.notifications.DeepLinkIntentHelper.TAB_SCHEDULE -> ScheduleRoute
+                    com.example.notifications.DeepLinkIntentHelper.TAB_HISTORY -> HistoryRoute
+                    else -> HomeRoute
+                }
+                navController.navigate(targetRoute) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         }
     }
 

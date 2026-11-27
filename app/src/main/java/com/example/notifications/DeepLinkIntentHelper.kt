@@ -13,9 +13,15 @@ object DeepLinkIntentHelper {
     private const val EXTRA_COVER = "kitsune_cover"
     private const val EXTRA_PROVIDER_ID = "kitsune_provider_id"
     private const val EXTRA_EPISODE_URL = "kitsune_episode_url"
+    private const val EXTRA_TAB_ID = "kitsune_tab_id"
 
     private const val TYPE_PLAYER = "player"
     private const val TYPE_DETAIL = "detail"
+    private const val TYPE_TAB = "tab"
+
+    const val TAB_EXPLORE = "explore"
+    const val TAB_SCHEDULE = "schedule"
+    const val TAB_HISTORY = "history"
 
     private val NON_ANIME_JK_SEGMENTS = setOf(
         "directorio", "buscar", "horario", "emision", "estrenos", "peliculas",
@@ -94,11 +100,23 @@ object DeepLinkIntentHelper {
         putExtra(EXTRA_PROVIDER_ID, providerId)
     }
 
+    fun putOpenTabExtras(
+        intent: Intent,
+        tabId: String
+    ): Intent = intent.apply {
+        putExtra(EXTRA_LINK_TYPE, TYPE_TAB)
+        putExtra(EXTRA_TAB_ID, tabId)
+    }
+
     fun parse(intent: Intent?): LaunchDeepLink? {
         if (intent == null) return null
 
         val type = intent.getStringExtra(EXTRA_LINK_TYPE)
         if (type != null) {
+            if (type == TYPE_TAB) {
+                val tabId = intent.getStringExtra(EXTRA_TAB_ID)?.takeIf { it.isNotBlank() } ?: return null
+                return LaunchDeepLink.OpenTab(tabId)
+            }
             val slug = intent.getStringExtra(EXTRA_SLUG)?.takeIf { it.isNotBlank() } ?: return null
             val providerId = intent.getStringExtra(EXTRA_PROVIDER_ID)?.takeIf { it.isNotBlank() }
                 ?: AnimeProvider.JKANIME.id

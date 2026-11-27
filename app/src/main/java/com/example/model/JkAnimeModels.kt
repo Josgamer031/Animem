@@ -272,6 +272,10 @@ sealed interface LaunchDeepLink {
         val slug: String,
         val providerId: String = AnimeProvider.JKANIME.id
     ) : LaunchDeepLink
+
+    data class OpenTab(
+        val tabId: String
+    ) : LaunchDeepLink
 }
 
 @Serializable

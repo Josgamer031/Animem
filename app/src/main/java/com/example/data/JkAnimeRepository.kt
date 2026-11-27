@@ -222,10 +222,16 @@ class JkAnimeRepository(context: Context? = null) {
 
     suspend fun setColorTheme(theme: AppColorTheme) {
         preferencesStore?.setColorTheme(theme)
+        appContext?.let { ctx ->
+            WidgetSnapshotStore.updateTheme(ctx, colorTheme = theme)
+        }
     }
 
     suspend fun setAmoledBlack(enabled: Boolean) {
         preferencesStore?.setAmoledBlack(enabled)
+        appContext?.let { ctx ->
+            WidgetSnapshotStore.updateTheme(ctx, amoledBlack = enabled)
+        }
     }
 
     suspend fun setAutoPlayNext(enabled: Boolean) {

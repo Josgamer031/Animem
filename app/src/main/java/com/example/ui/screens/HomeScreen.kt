@@ -167,6 +167,7 @@ import com.example.ui.components.tvFocusHighlight
 import com.example.ui.viewmodel.HomeUiState
 import com.example.ui.viewmodel.HomeViewModel
 import com.example.widget.KitsuneHomeWidgetProvider
+import com.example.widget.WidgetSnapshotStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
@@ -2098,54 +2099,303 @@ private fun PlaybackSettingsBottomSheet(
             }
 
             // Home Screen Widget Card
+            val widgetSnapshot = remember(context, preferences.colorTheme, preferences.amoledBlack) {
+                WidgetSnapshotStore.load(context)
+            }
+            val previewRootBg = if (preferences.amoledBlack) Color.Black else Color(0xFF0E1320)
+            val previewCardBg = if (preferences.amoledBlack) Color(0xFF0A0D14) else Color(0xFF182034)
+            val previewPrimary = Color(preferences.colorTheme.primaryHex)
+            val previewSecondary = Color(preferences.colorTheme.secondaryHex)
+            val previewTertiary = Color(preferences.colorTheme.tertiaryHex)
+
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 shape = RoundedCornerShape(16.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = stringResource(R.string.settings_widget_section_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Widgets,
+                            contentDescription = null,
+                            tint = previewSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_widget_section_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     Text(
                         text = stringResource(R.string.settings_widget_pin_desc),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedButton(
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            val manager = AppWidgetManager.getInstance(context)
-                            val provider = ComponentName(context, KitsuneHomeWidgetProvider::class.java)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                                manager.isRequestPinAppWidgetSupported
+
+                    // Live Miniature Widget Preview
+                    Surface(
+                        color = previewRootBg,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                manager.requestPinAppWidget(provider, null, null)
-                            } else {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_stat_kitsune),
+                                        contentDescription = null,
+                                        tint = previewPrimary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "KitsuneStream · ${activeProfile.name}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Surface(
+                                        color = Color.White.copy(alpha = 0.12f),
+                                        shape = CircleShape
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Search,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier
+                                                .padding(4.dp)
+                                                .size(12.dp)
+                                        )
+                                    }
+                                    Surface(
+                                        color = Color.White.copy(alpha = 0.12f),
+                                        shape = CircleShape
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.CalendarMonth,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier
+                                                .padding(4.dp)
+                                                .size(12.dp)
+                                        )
+                                    }
+                                    Surface(
+                                        color = Color.White.copy(alpha = 0.12f),
+                                        shape = CircleShape
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Refresh,
+                                            contentDescription = null,
+                                            tint = previewTertiary,
+                                            modifier = Modifier
+                                                .padding(4.dp)
+                                                .size(12.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                color = previewCardBg,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (widgetSnapshot.continueCoverUrl.isNotBlank()) {
+                                        AsyncImage(
+                                            model = widgetSnapshot.continueCoverUrl,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(width = 30.dp, height = 42.dp)
+                                                .clip(RoundedCornerShape(6.dp))
+                                        )
+                                    } else {
+                                        Surface(
+                                            color = Color(0xFF232B40),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier.size(width = 30.dp, height = 42.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.PlayArrow,
+                                                    contentDescription = null,
+                                                    tint = previewPrimary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (widgetSnapshot.continueEpisodeNumber > 0) {
+                                                "CONTINUAR VIENDO · ${widgetSnapshot.continueProgressPercent.coerceIn(5, 100)}%"
+                                            } else {
+                                                "CONTINUAR VIENDO"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = previewPrimary,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = widgetSnapshot.continueTitle.ifBlank {
+                                                stringResource(R.string.widget_no_history)
+                                            },
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (widgetSnapshot.continueEpisodeNumber > 0) {
+                                        Surface(
+                                            color = previewPrimary,
+                                            shape = CircleShape
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.PlayArrow,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                                Text(
+                                                    text = stringResource(R.string.widget_resume),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            val topPremiere = widgetSnapshot.todayPremieres.firstOrNull()
+                            if (topPremiere != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = topPremiere.title,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White.copy(alpha = 0.88f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = topPremiere.badge,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = previewSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                val manager = AppWidgetManager.getInstance(context)
+                                val provider = ComponentName(context, KitsuneHomeWidgetProvider::class.java)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                                    manager.isRequestPinAppWidgetSupported
+                                ) {
+                                    manager.requestPinAppWidget(provider, null, null)
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.settings_widget_pin_unsupported),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 46.dp)
+                                .testTag("settings_pin_widget_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Widgets,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.settings_widget_pin_button),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                KitsuneHomeWidgetProvider.triggerLiveRefresh(context)
                                 Toast.makeText(
                                     context,
-                                    context.getString(R.string.settings_widget_pin_unsupported),
-                                    Toast.LENGTH_LONG
+                                    context.getString(R.string.settings_widget_refreshed),
+                                    Toast.LENGTH_SHORT
                                 ).show()
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 46.dp)
-                            .testTag("settings_pin_widget_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Widgets,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = stringResource(R.string.settings_widget_pin_button))
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .heightIn(min = 46.dp)
+                                .testTag("settings_refresh_widget_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = stringResource(R.string.settings_widget_refresh_button),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = stringResource(R.string.settings_widget_refresh_button),
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }

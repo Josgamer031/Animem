@@ -80,4 +80,24 @@ class ExampleRobolectricTest {
     assertEquals(com.example.model.AnimeProvider.LATANIME, genreFilter?.provider)
     assertEquals("sci-fi", genreFilter?.genre)
   }
+
+  @Test
+  fun `widget tab deep links and snapshot store theme persist cleanly`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val scheduleIntent = DeepLinkIntentHelper.putOpenTabExtras(
+      Intent(),
+      DeepLinkIntentHelper.TAB_SCHEDULE
+    )
+    val parsedTab = DeepLinkIntentHelper.parse(scheduleIntent)
+    assertEquals(LaunchDeepLink.OpenTab(DeepLinkIntentHelper.TAB_SCHEDULE), parsedTab)
+
+    com.example.widget.WidgetSnapshotStore.updateTheme(
+      context = context,
+      colorTheme = com.example.model.AppColorTheme.CYBER_CYAN,
+      amoledBlack = true
+    )
+    val loaded = com.example.widget.WidgetSnapshotStore.load(context)
+    assertEquals(com.example.model.AppColorTheme.CYBER_CYAN, loaded.resolvedColorTheme())
+    assertTrue(loaded.amoledBlack)
+  }
 }
