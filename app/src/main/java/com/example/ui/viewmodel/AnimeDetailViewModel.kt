@@ -9,6 +9,7 @@ import com.example.model.AnimeProvider
 import com.example.model.EpisodeItem
 import com.example.model.EpisodePageRange
 import com.example.model.WatchHistoryEntry
+import com.example.model.WatchStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -56,6 +57,13 @@ class AnimeDetailViewModel(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    val favoriteStatus: StateFlow<WatchStatus?> =
+        (repository.favorites ?: MutableStateFlow(emptyList()))
+            .map { list ->
+                list.firstOrNull { it.animeSlug == slug && it.providerId == provider.id }?.watchStatus
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     private val _episodeQuery = MutableStateFlow("")
     val episodeQuery: StateFlow<String> = _episodeQuery.asStateFlow()
 
@@ -75,6 +83,16 @@ class AnimeDetailViewModel(
         val current = _uiState.value as? AnimeDetailUiState.Success ?: return
         viewModelScope.launch {
             repository.toggleFavorite(current.detail)
+        }
+    }
+
+    fun updateWatchStatus(status: WatchStatus) {
+        val current = _uiState.value as? AnimeDetailUiState.Success ?: return
+        viewModelScope.launch {
+            if (!isFavorite.value) {
+                repository.toggleFavorite(current.detail)
+            }
+            repository.updateFavoriteStatus(slug, provider.id, status)
         }
     }
 

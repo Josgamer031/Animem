@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.FavoriteAnime
+import com.example.model.WatchStatus
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
@@ -44,6 +45,28 @@ class FavoritesStore(private val context: Context) {
             prefs[favoritesKey] = json.encodeToString(updated)
         }
         return isNowFavorite
+    }
+
+    suspend fun updateWatchStatus(
+        profileId: String,
+        providerId: String,
+        animeSlug: String,
+        status: WatchStatus
+    ) {
+        context.favoritesDataStore.edit { prefs ->
+            val current = decode(prefs[favoritesKey])
+            val updated = current.map { item ->
+                if (item.profileId == profileId &&
+                    item.providerId == providerId &&
+                    item.animeSlug == animeSlug
+                ) {
+                    item.copy(watchStatus = status)
+                } else {
+                    item
+                }
+            }
+            prefs[favoritesKey] = json.encodeToString(updated)
+        }
     }
 
     suspend fun removeFavorite(profileId: String, providerId: String, animeSlug: String) {

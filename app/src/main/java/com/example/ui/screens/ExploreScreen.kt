@@ -30,6 +30,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Search
@@ -43,6 +45,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -59,7 +63,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +78,7 @@ import com.example.model.AnimeProvider
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.ExploreLoadingSkeleton
 import com.example.ui.viewmodel.ExploreViewModel
 
 private val STATUS_OPTIONS = listOf(
@@ -111,7 +118,9 @@ fun ExploreScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val recentSearches by viewModel.recentSearches.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    val haptics = LocalHapticFeedback.current
     var filtersExpanded by rememberSaveable { mutableStateOf(true) }
 
     val isJkAnime = state.filter.provider == AnimeProvider.JKANIME
@@ -352,6 +361,83 @@ fun ExploreScreen(
                     )
                 }
             }
+
+            // Recent Search History Chips
+            AnimatedVisibility(
+                visible = recentSearches.isNotEmpty() && state.filter.query.isBlank(),
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.explore_recent_searches),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(
+                            onClick = viewModel::clearRecentSearches,
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        ) {
+                            Text(
+                                text = "Limpiar",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(recentSearches, key = { it }) { term ->
+                            InputChip(
+                                selected = false,
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    focusManager.clearFocus()
+                                    viewModel.applyRecentSearch(term)
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.History,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { viewModel.removeRecentSearch(term) },
+                                        modifier = Modifier.size(20.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "Quitar búsqueda",
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                },
+                                label = {
+                                    Text(
+                                        text = term,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                colors = InputChipDefaults.inputChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ),
+                                modifier = Modifier.testTag("recent_search_chip_$term")
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Structured Filter Panel
@@ -557,22 +643,7 @@ fun ExploreScreen(
         // Results Grid / States
         when {
             state.isLoading && state.items.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        Text(
-                            text = "Buscando en ${state.filter.provider.displayName}…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                ExploreLoadingSkeleton()
             }
             state.errorMessage != null && state.items.isEmpty() -> {
                 Box(

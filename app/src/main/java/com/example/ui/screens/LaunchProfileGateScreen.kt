@@ -27,6 +27,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -45,15 +47,22 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SettingsRemote
+import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -82,7 +91,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -93,9 +105,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.R
+import com.example.model.DeviceMode
 import com.example.model.UserProfile
 import com.example.ui.components.PROFILE_AVATAR_CHOICES
+import com.example.ui.components.TvShortcutSection
+import com.example.ui.components.TvShortcutSpec
 import com.example.ui.components.profileAvatarDrawable
+import com.example.ui.components.tvFocusHighlight
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -104,6 +120,8 @@ import kotlin.math.sin
 
 private enum class LaunchPhase {
     INTRO,
+    DEVICE_MODE,
+    TV_GUIDE,
     PROFILES
 }
 
@@ -111,6 +129,9 @@ private enum class LaunchPhase {
 fun LaunchProfileGateScreen(
     profiles: List<UserProfile>,
     activeProfile: UserProfile,
+    hasSelectedDeviceMode: Boolean,
+    preferencesReady: Boolean,
+    onSelectDeviceMode: (DeviceMode) -> Unit,
     onSelectProfile: (String) -> Unit,
     onCreateProfile: (name: String, avatarKey: String) -> Unit,
     onUpdateProfile: (profileId: String, name: String, avatarKey: String) -> Unit,
@@ -122,11 +143,16 @@ fun LaunchProfileGateScreen(
     var isManaging by remember { mutableStateOf(false) }
     var editorVisible by remember { mutableStateOf(false) }
     var editingProfile by remember { mutableStateOf<UserProfile?>(null) }
+    val haptics = LocalHapticFeedback.current
 
-    LaunchedEffect(phase) {
-        if (phase == LaunchPhase.INTRO) {
-            delay(2_100L)
-            phase = LaunchPhase.PROFILES
+    LaunchedEffect(phase, preferencesReady, hasSelectedDeviceMode) {
+        if (phase == LaunchPhase.INTRO && preferencesReady) {
+            delay(2_000L)
+            phase = if (hasSelectedDeviceMode) {
+                LaunchPhase.PROFILES
+            } else {
+                LaunchPhase.DEVICE_MODE
+            }
         }
     }
 
@@ -186,7 +212,39 @@ fun LaunchProfileGateScreen(
                         primaryColor = primaryColor,
                         secondaryColor = secondaryColor,
                         tertiaryColor = tertiaryColor,
-                        onSkipIntro = { phase = LaunchPhase.PROFILES }
+                        onSkipIntro = {
+                            if (preferencesReady) {
+                                phase = if (hasSelectedDeviceMode) {
+                                    LaunchPhase.PROFILES
+                                } else {
+                                    LaunchPhase.DEVICE_MODE
+                                }
+                            }
+                        }
+                    )
+                }
+
+                LaunchPhase.DEVICE_MODE -> {
+                    DeviceModeOnboardingStep(
+                        onPickPhone = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onSelectDeviceMode(DeviceMode.PHONE)
+                            phase = LaunchPhase.PROFILES
+                        },
+                        onPickSmartTv = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onSelectDeviceMode(DeviceMode.SMART_TV)
+                            phase = LaunchPhase.TV_GUIDE
+                        }
+                    )
+                }
+
+                LaunchPhase.TV_GUIDE -> {
+                    TvOnboardingGuideStep(
+                        onContinue = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            phase = LaunchPhase.PROFILES
+                        }
                     )
                 }
 
@@ -734,6 +792,7 @@ private fun LaunchProfileTile(
         tonalElevation = if (isActive) 6.dp else 2.dp,
         modifier = Modifier
             .fillMaxWidth()
+            .tvFocusHighlight(shape = RoundedCornerShape(22.dp))
             .clip(RoundedCornerShape(22.dp))
             .clickable {
                 if (isManaging) onEdit() else onSelect()
@@ -854,6 +913,7 @@ private fun LaunchCreateProfileTile(onClick: () -> Unit) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = Modifier
             .fillMaxWidth()
+            .tvFocusHighlight(shape = RoundedCornerShape(22.dp))
             .clip(RoundedCornerShape(22.dp))
             .clickable(onClick = onClick)
             .testTag("launch_create_profile_tile")
@@ -1081,6 +1141,343 @@ private fun LaunchProfileEditorDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DeviceModeOnboardingStep(
+    onPickPhone: () -> Unit,
+    onPickSmartTv: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 20.dp)
+            .testTag("device_mode_setup_screen"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            shape = RoundedCornerShape(999.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+        ) {
+            Text(
+                text = "CONFIGURACIÓN INICIAL",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = stringResource(R.string.device_mode_setup_title),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.ExtraBold,
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = stringResource(R.string.device_mode_setup_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = 520.dp)
+        )
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .widthIn(max = 760.dp)
+                .fillMaxWidth()
+        ) {
+            val sideBySide = maxWidth >= 560.dp
+            if (sideBySide) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    DeviceModeOptionCard(
+                        title = stringResource(R.string.device_mode_phone_title),
+                        description = stringResource(R.string.device_mode_phone_desc),
+                        badge = "Táctil · Vertical",
+                        icon = Icons.Rounded.Smartphone,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        onClick = onPickPhone,
+                        testTag = "setup_mode_phone",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DeviceModeOptionCard(
+                        title = stringResource(R.string.device_mode_tv_title),
+                        description = stringResource(R.string.device_mode_tv_desc),
+                        badge = "Control remoto · D-Pad",
+                        icon = Icons.Rounded.Tv,
+                        accentColor = MaterialTheme.colorScheme.secondary,
+                        onClick = onPickSmartTv,
+                        testTag = "setup_mode_tv",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    DeviceModeOptionCard(
+                        title = stringResource(R.string.device_mode_phone_title),
+                        description = stringResource(R.string.device_mode_phone_desc),
+                        badge = "Táctil · Vertical",
+                        icon = Icons.Rounded.Smartphone,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        onClick = onPickPhone,
+                        testTag = "setup_mode_phone",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    DeviceModeOptionCard(
+                        title = stringResource(R.string.device_mode_tv_title),
+                        description = stringResource(R.string.device_mode_tv_desc),
+                        badge = "Control remoto · D-Pad",
+                        icon = Icons.Rounded.Tv,
+                        accentColor = MaterialTheme.colorScheme.secondary,
+                        onClick = onPickSmartTv,
+                        testTag = "setup_mode_tv",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceModeOptionCard(
+    title: String,
+    description: String,
+    badge: String,
+    icon: ImageVector,
+    accentColor: Color,
+    onClick: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        border = BorderStroke(1.5.dp, accentColor.copy(alpha = 0.55f)),
+        tonalElevation = 6.dp,
+        modifier = modifier
+            .tvFocusHighlight(shape = RoundedCornerShape(24.dp), focusedScale = 1.03f)
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = accentColor.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.size(56.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = title,
+                            tint = accentColor,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    }
+                }
+                Surface(
+                    color = accentColor.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(999.dp)
+                ) {
+                    Text(
+                        text = badge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Elegir este modo",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = accentColor
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvOnboardingGuideStep(
+    onContinue: () -> Unit
+) {
+    val quickNav = remember {
+        listOf(
+            TvShortcutSpec(
+                keys = "▲ ▼ ◀ ▶",
+                title = "Mover foco",
+                description = "Desplázate por el menú lateral, carruseles y episodios."
+            ),
+            TvShortcutSpec(
+                keys = "OK / Enter",
+                title = "Abrir o reproducir",
+                description = "Selecciona el anime enfocado o pausa el episodio."
+            ),
+            TvShortcutSpec(
+                keys = "CH+ / CH−",
+                title = "JKAnime ↔ Latanime",
+                description = "Cambia de proveedor o salta al siguiente/anterior episodio en el reproductor."
+            ),
+            TvShortcutSpec(
+                keys = "Buscar / /",
+                title = "Buscador y filtros",
+                description = "Salta directo a Explorar con la tecla Buscar del control."
+            ),
+            TvShortcutSpec(
+                keys = "Botón Rojo / S",
+                title = "Omitir Opening (+85s)",
+                description = "Adelanta el opening o ending al instante durante un episodio."
+            ),
+            TvShortcutSpec(
+                keys = "Menú / Info / M",
+                title = "Ver guía completa",
+                description = "Abre todos los atajos en cualquier momento."
+            )
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 18.dp)
+            .testTag("tv_onboarding_guide_screen"),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.SettingsRemote,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+                Column {
+                    Text(
+                        text = stringResource(R.string.tv_shortcuts_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = stringResource(R.string.tv_shortcuts_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TvShortcutSection(
+                    title = "Atajos principales del control remoto",
+                    icon = Icons.Rounded.LiveTv,
+                    accentColor = MaterialTheme.colorScheme.secondary,
+                    items = quickNav
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onContinue,
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary
+            ),
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxWidth()
+                .height(54.dp)
+                .tvFocusHighlight(shape = RoundedCornerShape(16.dp))
+                .testTag("tv_guide_continue_button")
+        ) {
+            Text(
+                text = stringResource(R.string.tv_shortcuts_continue),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
         }
     }
 }

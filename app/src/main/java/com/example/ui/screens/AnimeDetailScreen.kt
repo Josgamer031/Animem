@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -68,13 +69,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -89,7 +92,10 @@ import com.example.model.AnimeDetail
 import com.example.model.AnimeProvider
 import com.example.model.EpisodeItem
 import com.example.model.WatchHistoryEntry
+import com.example.model.WatchStatus
+import com.example.ui.components.AnimeDetailLoadingSkeleton
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.tvFocusHighlight
 import com.example.ui.viewmodel.AnimeDetailUiState
 import com.example.ui.viewmodel.AnimeDetailViewModel
 
@@ -104,8 +110,10 @@ fun AnimeDetailScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val watchedMap by viewModel.watchedEpisodes.collectAsStateWithLifecycle()
     val isFavorite by viewModel.isFavorite.collectAsStateWithLifecycle()
+    val favoriteStatus by viewModel.favoriteStatus.collectAsStateWithLifecycle()
     val episodeQuery by viewModel.episodeQuery.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
 
     val favoriteScale by animateFloatAsState(
         targetValue = if (isFavorite) 1.15f else 1f,
@@ -127,9 +135,7 @@ fun AnimeDetailScreen(
         ) {
             when (val state = uiState) {
                 is AnimeDetailUiState.Loading -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
+                    AnimeDetailLoadingSkeleton()
                 }
                 is AnimeDetailUiState.Error -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -156,17 +162,26 @@ fun AnimeDetailScreen(
                         isLoadingMoreEpisodes = state.isLoadingMoreEpisodes,
                         sortDescending = state.sortDescending,
                         isFavorite = isFavorite,
+                        favoriteStatus = favoriteStatus,
                         watchedMap = watchedMap,
                         onEpisodeQueryChange = viewModel::updateEpisodeQuery,
                         onSelectPage = viewModel::selectEpisodePage,
                         onToggleSort = viewModel::toggleSortOrder,
-                        onToggleFavorite = viewModel::toggleFavorite,
+                        onToggleFavorite = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.toggleFavorite()
+                        },
+                        onSelectWatchStatus = { status ->
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            viewModel.updateWatchStatus(status)
+                        },
                         onGenreClick = { genre ->
                             viewModel.onGenreSelected(genre)
                             onNavigateToGenreExplore()
                         },
                         onRetryEpisodes = viewModel::loadDetail,
                         onPlayEpisode = { epNum ->
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             val epUrl = state.detail.episodes.firstOrNull { it.number == epNum }?.url.orEmpty()
                             onPlayEpisode(
                                 state.detail.slug,
@@ -216,7 +231,10 @@ fun AnimeDetailScreen(
                             modifier = Modifier.size(48.dp)
                         ) {
                             IconButton(
-                                onClick = viewModel::toggleFavorite,
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.toggleFavorite()
+                                },
                                 modifier = Modifier.testTag("detail_favorite_button")
                             ) {
                                 Icon(
@@ -274,11 +292,13 @@ private fun AnimeDetailContent(
     isLoadingMoreEpisodes: Boolean,
     sortDescending: Boolean,
     isFavorite: Boolean,
+    favoriteStatus: WatchStatus?,
     watchedMap: Map<Int, WatchHistoryEntry>,
     onEpisodeQueryChange: (String) -> Unit,
     onSelectPage: (Int) -> Unit,
     onToggleSort: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onSelectWatchStatus: (WatchStatus) -> Unit,
     onGenreClick: (String) -> Unit,
     onRetryEpisodes: () -> Unit,
     onPlayEpisode: (Int) -> Unit
@@ -321,7 +341,7 @@ private fun AnimeDetailContent(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .blur(18.dp)
+                        .alpha(0.38f)
                 )
                 if (detail.coverUrl.isNotBlank()) {
                     AsyncImage(
@@ -330,7 +350,7 @@ private fun AnimeDetailContent(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
-                            .blur(18.dp)
+                            .alpha(0.38f)
                     )
                 }
                 Box(
@@ -515,6 +535,40 @@ private fun AnimeDetailContent(
                             },
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+                }
+
+                // Tracking Status Selector when saved in Mi Lista
+                AnimatedVisibility(visible = isFavorite) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.watch_status_label),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.secondary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(WatchStatus.entries) { status ->
+                                val selected = favoriteStatus == status
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { onSelectWatchStatus(status) },
+                                    label = {
+                                        Text(
+                                            text = status.label,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.secondary,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
+                                    ),
+                                    modifier = Modifier.testTag("detail_watch_status_${status.name.lowercase()}")
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -817,6 +871,7 @@ private fun EpisodeRowItem(
         tonalElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
+            .tvFocusHighlight(shape = MaterialTheme.shapes.small, focusedScale = 1.02f)
             .clip(MaterialTheme.shapes.small)
             .clickable(onClick = onClick)
             .testTag("episode_item_${episode.number}")

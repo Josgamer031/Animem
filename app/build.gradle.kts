@@ -125,6 +125,8 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer.hls)
   implementation(libs.androidx.media3.datasource.okhttp)
   implementation(libs.androidx.media3.ui)
+  implementation(libs.androidx.media3.session)
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)

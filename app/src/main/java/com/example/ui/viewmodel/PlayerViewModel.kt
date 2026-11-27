@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.CloudflareBlockedException
 import com.example.data.JkAnimeRepository
 import com.example.model.AnimeProvider
+import com.example.model.EpisodeItem
 import com.example.model.ResolvedVideo
+import com.example.model.UserPreferences
 import com.example.model.VideoServer
 import com.example.model.WatchHistoryEntry
 import kotlinx.coroutines.Job
@@ -13,9 +15,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -42,6 +46,8 @@ data class PlayerUiState(
     val selectedServerIndex: Int = 0,
     val resolvedVideo: ResolvedVideo? = null,
     val resumePositionMs: Long = 0L,
+    val episodes: List<EpisodeItem> = emptyList(),
+    val isLoadingEpisodesList: Boolean = false,
     val errorMessage: String? = null,
     val blockedUrl: String? = null
 )
@@ -70,9 +76,19 @@ class PlayerViewModel(
     )
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
+    val userPreferences: StateFlow<UserPreferences> =
+        (repository.userPreferences ?: MutableStateFlow(UserPreferences()))
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                UserPreferences()
+            )
+
     private var loadJob: Job? = null
     private var resolveJob: Job? = null
     private var probeJob: Job? = null
+    private var episodeListJob: Job? = null
+    private var episodesLoadedForSlug: String? = null
     private var allCandidateServers: List<VideoServer> = emptyList()
     private val resolvedCache = mutableMapOf<String, ResolvedVideo>()
     private val sniffAttemptedServers = mutableSetOf<String>()
@@ -80,10 +96,69 @@ class PlayerViewModel(
 
     init {
         loadEpisode(initialEpisodeNumber, initialEpisodeUrl)
+        loadEpisodesListIfNeeded()
     }
 
     private fun serverKey(server: VideoServer): String =
         server.decodedEmbedUrl.ifBlank { "${server.name}_${server.rawUrl}" }
+
+    fun loadEpisodesListIfNeeded() {
+        val slug = _uiState.value.slug
+        val provider = _uiState.value.provider
+        val key = "${provider.id}:$slug"
+        if (episodesLoadedForSlug == key && _uiState.value.episodes.isNotEmpty()) return
+        episodesLoadedForSlug = key
+        episodeListJob?.cancel()
+        episodeListJob = viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingEpisodesList = true) }
+            repository.getAnimeDetail(slug, provider).onSuccess { detail ->
+                val map = LinkedHashMap<Int, EpisodeItem>()
+                detail.episodes.forEach { map[it.number] = it }
+
+                fun publishEpisodes() {
+                    val sorted = map.values.sortedBy { it.number }
+                    _uiState.update { state ->
+                        val knownNext = sorted.any { it.number > state.episodeNumber }
+                        state.copy(
+                            animeTitle = state.animeTitle.ifBlank { detail.title },
+                            coverUrl = state.coverUrl.ifBlank { detail.coverUrl },
+                            episodes = sorted,
+                            hasNextEpisode = state.hasNextEpisode || knownNext
+                        )
+                    }
+                }
+
+                publishEpisodes()
+
+                if (detail.animeId.isNotBlank() && provider == AnimeProvider.JKANIME) {
+                    val knownMaxPage = detail.pageRanges.maxOfOrNull { it.page } ?: 1
+                    if (knownMaxPage > 1) {
+                        val pages = (2..knownMaxPage.coerceAtMost(25)).toList()
+                        for (page in pages) {
+                            val res = repository.fetchEpisodesPageResult(slug, detail.animeId, page)
+                                .getOrNull() ?: break
+                            if (res.episodes.isEmpty()) continue
+                            res.episodes.forEach { map[it.number] = it }
+                            publishEpisodes()
+                        }
+                    } else if (detail.episodes.size >= 12) {
+                        var page = 2
+                        while (page <= 25) {
+                            val res = repository.fetchEpisodesPageResult(slug, detail.animeId, page)
+                                .getOrNull() ?: break
+                            val newOnes = res.episodes.filter { !map.containsKey(it.number) }
+                            if (newOnes.isEmpty()) break
+                            res.episodes.forEach { map[it.number] = it }
+                            publishEpisodes()
+                            if (res.episodes.size < 12) break
+                            page++
+                        }
+                    }
+                }
+            }
+            _uiState.update { it.copy(isLoadingEpisodesList = false) }
+        }
+    }
 
     fun loadEpisode(episodeNumber: Int, explicitEpisodeUrl: String = "") {
         if (episodeNumber < 1) return
@@ -106,11 +181,13 @@ class PlayerViewModel(
                         it.providerId == provider.id
                 }
 
+            val knownHasNext = _uiState.value.episodes.any { it.number > episodeNumber }
+
             _uiState.update {
                 it.copy(
                     episodeNumber = episodeNumber,
                     episodeUrl = resolvedEpUrl,
-                    hasNextEpisode = false,
+                    hasNextEpisode = knownHasNext,
                     isLoadingServers = true,
                     isResolvingStream = false,
                     servers = emptyList(),
@@ -124,21 +201,11 @@ class PlayerViewModel(
                 )
             }
 
-            if (_uiState.value.coverUrl.isBlank()) {
-                repository.getAnimeDetail(slug, provider).onSuccess { detail ->
-                    _uiState.update {
-                        it.copy(
-                            animeTitle = detail.title,
-                            coverUrl = detail.coverUrl
-                        )
-                    }
-                }
-            }
-
             repository.getEpisodePlaybackInfo(slug, episodeNumber, provider, resolvedEpUrl)
                 .onSuccess { info ->
                     val servers = info.servers
-                    val hasNext = info.hasNextEpisode ?: false
+                    val hasNextFromEpisodes = _uiState.value.episodes.any { it.number > episodeNumber }
+                    val hasNext = (info.hasNextEpisode ?: false) || hasNextFromEpisodes
                     if (servers.isEmpty()) {
                         _uiState.update {
                             it.copy(
@@ -185,7 +252,9 @@ class PlayerViewModel(
     fun skipToNextEpisodeIfAvailable() {
         val state = _uiState.value
         if (state.hasNextEpisode) {
-            loadEpisode(state.episodeNumber + 1)
+            val nextNum = state.episodeNumber + 1
+            val nextUrl = state.episodes.firstOrNull { it.number == nextNum }?.url.orEmpty()
+            loadEpisode(nextNum, nextUrl)
         }
     }
 

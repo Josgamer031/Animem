@@ -573,4 +573,120 @@ class JkAnimeParserTest {
         val decoded = json.decodeFromString(com.example.model.FavoriteAnime.serializer(), encoded)
         assertEquals(fav, decoded)
     }
+
+    @Test
+    fun userPreferences_serializesAndPreservesDefaults() {
+        val defaults = com.example.model.UserPreferences()
+        assertEquals(true, defaults.autoPlayNext)
+        assertEquals(false, defaults.autoSkipOpening)
+        assertEquals(com.example.model.DeviceMode.PHONE, defaults.deviceMode)
+        assertEquals(false, defaults.hasSelectedDeviceMode)
+        assertTrue(defaults.recentSearches.isEmpty())
+
+        val prefs = com.example.model.UserPreferences(
+            autoPlayNext = false,
+            autoSkipOpening = true,
+            recentSearches = listOf("Frieren", "Dandadan"),
+            deviceMode = com.example.model.DeviceMode.SMART_TV,
+            hasSelectedDeviceMode = true
+        )
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val encoded = json.encodeToString(com.example.model.UserPreferences.serializer(), prefs)
+        val decoded = json.decodeFromString(com.example.model.UserPreferences.serializer(), encoded)
+        assertEquals(prefs, decoded)
+    }
+
+    @Test
+    fun favoriteAnime_legacyJsonDefaultsWatchStatusAndRoundTripsAllStatuses() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val legacyJson = """{"animeSlug":"frieren","animeTitle":"Frieren","providerId":"jkanime","profileId":"default"}"""
+        val decodedLegacy = json.decodeFromString(com.example.model.FavoriteAnime.serializer(), legacyJson)
+        assertEquals(com.example.model.WatchStatus.WATCHING, decodedLegacy.watchStatus)
+
+        com.example.model.WatchStatus.entries.forEach { st ->
+            val updated = decodedLegacy.copy(watchStatus = st)
+            val roundTrip = json.decodeFromString(
+                com.example.model.FavoriteAnime.serializer(),
+                json.encodeToString(com.example.model.FavoriteAnime.serializer(), updated)
+            )
+            assertEquals(st, roundTrip.watchStatus)
+        }
+    }
+
+    @Test
+    fun computeProfileWatchStats_aggregatesHistoryFavoritesAndDuration() {
+        val history = listOf(
+            com.example.model.WatchHistoryEntry(
+                animeSlug = "solo-leveling",
+                animeTitle = "Solo Leveling",
+                coverUrl = "",
+                episodeNumber = 1,
+                positionMs = 1_200_000L, // 20 min
+                durationMs = 1_440_000L,
+                providerId = "jkanime"
+            ),
+            com.example.model.WatchHistoryEntry(
+                animeSlug = "solo-leveling",
+                animeTitle = "Solo Leveling",
+                coverUrl = "",
+                episodeNumber = 2,
+                positionMs = 1_500_000L, // 25 min
+                durationMs = 1_500_000L,
+                providerId = "jkanime"
+            ),
+            com.example.model.WatchHistoryEntry(
+                animeSlug = "dandadan",
+                animeTitle = "Dandadan",
+                coverUrl = "",
+                episodeNumber = 1,
+                positionMs = 1_500_000L, // 25 min
+                durationMs = 1_500_000L,
+                providerId = "latanime"
+            )
+        )
+        val favorites = listOf(
+            com.example.model.FavoriteAnime(
+                animeSlug = "solo-leveling",
+                animeTitle = "Solo Leveling",
+                watchStatus = com.example.model.WatchStatus.WATCHING
+            ),
+            com.example.model.FavoriteAnime(
+                animeSlug = "dandadan",
+                animeTitle = "Dandadan",
+                watchStatus = com.example.model.WatchStatus.COMPLETED
+            ),
+            com.example.model.FavoriteAnime(
+                animeSlug = "blue-box",
+                animeTitle = "Blue Box",
+                watchStatus = com.example.model.WatchStatus.PLAN_TO_WATCH
+            )
+        )
+        val stats = com.example.model.computeProfileWatchStats(history, favorites)
+        assertEquals(3, stats.totalEpisodesWatched)
+        assertEquals(2, stats.uniqueAnimesWatched)
+        assertEquals(4_200_000L, stats.totalWatchTimeMs)
+        assertEquals("1h 10m", com.example.model.formatWatchDuration(stats.totalWatchTimeMs))
+        assertEquals("0 min", com.example.model.formatWatchDuration(0L))
+        assertEquals(1, stats.watchingCount)
+        assertEquals(1, stats.planToWatchCount)
+        assertEquals(1, stats.completedCount)
+        assertEquals(0, stats.droppedCount)
+        assertEquals(2, stats.jkanimeEpisodesCount)
+        assertEquals(1, stats.latanimeEpisodesCount)
+    }
+
+    @Test
+    fun userPreferences_premiereAlertFieldsSerializeCorrectly() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val prefs = com.example.model.UserPreferences(
+            premiereAlertsEnabled = true,
+            notifiedPremiereKeys = listOf("jkanime:frieren:28", "latanime:dandadan:12")
+        )
+        val decoded = json.decodeFromString(
+            com.example.model.UserPreferences.serializer(),
+            json.encodeToString(com.example.model.UserPreferences.serializer(), prefs)
+        )
+        assertEquals(true, decoded.premiereAlertsEnabled)
+        assertEquals(listOf("jkanime:frieren:28", "latanime:dandadan:12"), decoded.notifiedPremiereKeys)
+    }
 }

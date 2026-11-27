@@ -28,9 +28,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -40,12 +43,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -83,6 +88,7 @@ fun AnimePosterCard(
 
     Surface(
         modifier = modifier
+            .tvFocusHighlight(shape = MaterialTheme.shapes.medium)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -215,6 +221,7 @@ fun LatestEpisodeCard(
 
     Surface(
         modifier = modifier
+            .tvFocusHighlight(shape = MaterialTheme.shapes.medium)
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -334,7 +341,9 @@ fun LatestEpisodeCard(
 fun SectionHeader(
     title: String,
     accentLabel: String = "",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    actionLabel: String = "",
+    onActionClick: (() -> Unit)? = null
 ) {
     Row(
         modifier = modifier
@@ -343,7 +352,10 @@ fun SectionHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
             Box(
                 modifier = Modifier
                     .width(4.dp)
@@ -363,20 +375,42 @@ fun SectionHeader(
                 text = title,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+            if (accentLabel.isNotBlank()) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(999.dp)
+                ) {
+                    Text(
+                        text = accentLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
+                    )
+                }
+            }
         }
-        if (accentLabel.isNotBlank()) {
-            Surface(
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                shape = RoundedCornerShape(999.dp)
+        if (onActionClick != null && actionLabel.isNotBlank()) {
+            TextButton(
+                onClick = onActionClick,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
-                    text = accentLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    text = actionLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
@@ -384,18 +418,33 @@ fun SectionHeader(
 }
 
 @Composable
-fun HomeLoadingSkeleton(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.72f,
+fun rememberShimmerBrush(): Brush {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmer_sweep")
+    val translate by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1100f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900),
-            repeatMode = RepeatMode.Reverse
+            animation = tween(durationMillis = 1250),
+            repeatMode = RepeatMode.Restart
         ),
-        label = "shimmer_alpha"
+        label = "shimmer_translate"
     )
-    val shimmerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)
+    val base = MaterialTheme.colorScheme.surfaceVariant
+    val highlight = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+    return Brush.linearGradient(
+        colors = listOf(
+            base.copy(alpha = 0.45f),
+            highlight,
+            base.copy(alpha = 0.45f)
+        ),
+        start = Offset(translate - 360f, translate - 360f),
+        end = Offset(translate, translate)
+    )
+}
+
+@Composable
+fun HomeLoadingSkeleton(modifier: Modifier = Modifier) {
+    val shimmerBrush = rememberShimmerBrush()
 
     Column(
         modifier = modifier
@@ -406,16 +455,16 @@ fun HomeLoadingSkeleton(modifier: Modifier = Modifier) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(260.dp)
+                .height(268.dp)
                 .clip(MaterialTheme.shapes.large)
-                .background(shimmerColor)
+                .background(shimmerBrush)
         )
         Box(
             modifier = Modifier
                 .width(180.dp)
                 .height(22.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(shimmerColor)
+                .background(shimmerBrush)
         )
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -424,10 +473,10 @@ fun HomeLoadingSkeleton(modifier: Modifier = Modifier) {
             items(4) {
                 Box(
                     modifier = Modifier
-                        .width(160.dp)
-                        .height(110.dp)
+                        .width(188.dp)
+                        .height(118.dp)
                         .clip(MaterialTheme.shapes.medium)
-                        .background(shimmerColor)
+                        .background(shimmerBrush)
                 )
             }
         }
@@ -436,7 +485,7 @@ fun HomeLoadingSkeleton(modifier: Modifier = Modifier) {
                 .width(160.dp)
                 .height(22.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(shimmerColor)
+                .background(shimmerBrush)
         )
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -444,10 +493,89 @@ fun HomeLoadingSkeleton(modifier: Modifier = Modifier) {
             items(4) {
                 Box(
                     modifier = Modifier
-                        .width(136.dp)
-                        .height(190.dp)
+                        .width(142.dp)
+                        .aspectRatio(0.70f)
                         .clip(MaterialTheme.shapes.medium)
-                        .background(shimmerColor)
+                        .background(shimmerBrush)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ExploreLoadingSkeleton(modifier: Modifier = Modifier) {
+    val shimmerBrush = rememberShimmerBrush()
+
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(136.dp),
+        contentPadding = PaddingValues(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = modifier.fillMaxSize()
+    ) {
+        items(9) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.70f)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(shimmerBrush)
+            )
+        }
+    }
+}
+
+@Composable
+fun AnimeDetailLoadingSkeleton(modifier: Modifier = Modifier) {
+    val shimmerBrush = rememberShimmerBrush()
+
+    Column(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(310.dp)
+                .background(shimmerBrush)
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(shimmerBrush)
+                )
+                Box(
+                    modifier = Modifier
+                        .width(136.dp)
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(shimmerBrush)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(68.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(shimmerBrush)
+            )
+            repeat(4) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(74.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(shimmerBrush)
                 )
             }
         }

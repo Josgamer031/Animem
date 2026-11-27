@@ -5,6 +5,7 @@ import com.example.model.AnimeDetail
 import com.example.model.AnimeProvider
 import com.example.model.AnimeSchedule
 import com.example.model.AnimeSummary
+import com.example.model.DeviceMode
 import com.example.model.DirectoryFilter
 import com.example.model.DirectoryPage
 import com.example.model.EpisodeItem
@@ -14,9 +15,12 @@ import com.example.model.HomeFeed
 import com.example.model.ResolvedVideo
 import com.example.model.ScheduleDay
 import com.example.model.ScheduleItem
+import com.example.model.UserPreferences
 import com.example.model.UserProfile
 import com.example.model.VideoServer
 import com.example.model.WatchHistoryEntry
+import com.example.model.WatchStatus
+import com.example.widget.WidgetSnapshotStore
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -46,9 +50,11 @@ class JkAnimeRepository(context: Context? = null) {
         }
     }
     private val streamResolver = VideoStreamResolver(httpClient)
-    private val historyStore = context?.let { WatchHistoryStore(it.applicationContext) }
-    private val favoritesStore = context?.let { FavoritesStore(it.applicationContext) }
-    private val profileStore = context?.let { ProfileStore(it.applicationContext) }
+    private val appContext = context?.applicationContext
+    private val historyStore = appContext?.let { WatchHistoryStore(it) }
+    private val favoritesStore = appContext?.let { FavoritesStore(it) }
+    private val profileStore = appContext?.let { ProfileStore(it) }
+    private val preferencesStore = appContext?.let { UserPreferencesStore(it) }
 
     private val _selectedProvider = MutableStateFlow(AnimeProvider.JKANIME)
     val selectedProvider: StateFlow<AnimeProvider> = _selectedProvider.asStateFlow()
@@ -84,6 +90,41 @@ class JkAnimeRepository(context: Context? = null) {
 
     val activeProfile: Flow<UserProfile>?
         get() = profileStore?.activeProfileFlow
+
+    val userPreferences: Flow<UserPreferences>?
+        get() = preferencesStore?.preferencesFlow
+
+    suspend fun setDeviceMode(mode: DeviceMode, markSelected: Boolean = true) {
+        preferencesStore?.setDeviceMode(mode, markSelected)
+    }
+
+    suspend fun setAutoPlayNext(enabled: Boolean) {
+        preferencesStore?.setAutoPlayNext(enabled)
+    }
+
+    suspend fun setAutoSkipOpening(enabled: Boolean) {
+        preferencesStore?.setAutoSkipOpening(enabled)
+    }
+
+    suspend fun setPremiereAlertsEnabled(enabled: Boolean) {
+        preferencesStore?.setPremiereAlertsEnabled(enabled)
+    }
+
+    suspend fun recordNotifiedPremiereKeys(keys: List<String>) {
+        preferencesStore?.recordNotifiedPremiereKeys(keys)
+    }
+
+    suspend fun recordSearchQuery(query: String) {
+        preferencesStore?.recordSearchQuery(query)
+    }
+
+    suspend fun removeSearchQuery(query: String) {
+        preferencesStore?.removeSearchQuery(query)
+    }
+
+    suspend fun clearSearchQueries() {
+        preferencesStore?.clearSearchQueries()
+    }
 
     val watchHistory: Flow<List<WatchHistoryEntry>>?
         get() = when {
@@ -127,6 +168,12 @@ class JkAnimeRepository(context: Context? = null) {
         favoritesStore?.removeFavorite(currentProfileId, providerId, slug)
     }
 
+    suspend fun updateFavoriteStatus(slug: String, providerId: String, status: WatchStatus) {
+        val currentProfileId = profileStore?.activeProfileFlow?.firstOrNull()?.id
+            ?: ProfileStore.DEFAULT_PROFILE_ID
+        favoritesStore?.updateWatchStatus(currentProfileId, providerId, slug, status)
+    }
+
     suspend fun createProfile(name: String, avatarKey: String): UserProfile? =
         profileStore?.createProfile(name, avatarKey, _selectedProvider.value.id)
 
@@ -136,6 +183,7 @@ class JkAnimeRepository(context: Context? = null) {
 
     suspend fun switchProfile(profileId: String) {
         profileStore?.switchProfile(profileId)
+        syncWidgetContinueWatching(profileId)
     }
 
     suspend fun deleteProfile(profileId: String): Boolean {
@@ -152,6 +200,12 @@ class JkAnimeRepository(context: Context? = null) {
             when (provider) {
                 AnimeProvider.LATANIME -> getLatanimeHomeFeed()
                 AnimeProvider.JKANIME -> getJkAnimeHomeFeed()
+            }
+        }.onSuccess { feed ->
+            appContext?.let { ctx ->
+                if (feed.latestEpisodes.isNotEmpty()) {
+                    WidgetSnapshotStore.updateTodayPremieresFromEpisodes(ctx, feed.latestEpisodes)
+                }
             }
         }
 
@@ -409,6 +463,24 @@ class JkAnimeRepository(context: Context? = null) {
             when (provider) {
                 AnimeProvider.LATANIME -> getLatanimeSchedule()
                 AnimeProvider.JKANIME -> getJkAnimeSchedule()
+            }
+        }.onSuccess { schedule ->
+            appContext?.let { ctx ->
+                val dayIndex = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
+                val todayKey = when (dayIndex) {
+                    java.util.Calendar.MONDAY -> "lunes"
+                    java.util.Calendar.TUESDAY -> "martes"
+                    java.util.Calendar.WEDNESDAY -> "miercoles"
+                    java.util.Calendar.THURSDAY -> "jueves"
+                    java.util.Calendar.FRIDAY -> "viernes"
+                    java.util.Calendar.SATURDAY -> "sabado"
+                    else -> "domingo"
+                }
+                val today = schedule.days.firstOrNull { it.dayKey == todayKey }
+                    ?: schedule.days.firstOrNull { it.items.isNotEmpty() }
+                if (today != null && today.items.isNotEmpty()) {
+                    WidgetSnapshotStore.updateTodayPremieresFromSchedule(ctx, today.dayLabel, today.items)
+                }
             }
         }
 
@@ -1184,21 +1256,44 @@ class JkAnimeRepository(context: Context? = null) {
     }
 
     suspend fun saveWatchProgress(entry: WatchHistoryEntry) {
-        val currentProfileId = profileStore?.activeProfileFlow?.firstOrNull()?.id
-            ?: ProfileStore.DEFAULT_PROFILE_ID
-        historyStore?.upsertProgress(entry.copy(profileId = currentProfileId))
+        val profile = profileStore?.activeProfileFlow?.firstOrNull()
+        val currentProfileId = profile?.id ?: ProfileStore.DEFAULT_PROFILE_ID
+        val updatedEntry = entry.copy(profileId = currentProfileId)
+        historyStore?.upsertProgress(updatedEntry)
+        appContext?.let { ctx ->
+            WidgetSnapshotStore.updateContinueWatching(
+                context = ctx,
+                profileName = profile?.name ?: "Otaku",
+                latestEntry = updatedEntry
+            )
+        }
     }
 
     suspend fun removeWatchHistoryEntry(slug: String, episodeNumber: Int, providerId: String) {
         val currentProfileId = profileStore?.activeProfileFlow?.firstOrNull()?.id
             ?: ProfileStore.DEFAULT_PROFILE_ID
         historyStore?.removeEntry(currentProfileId, providerId, slug, episodeNumber)
+        syncWidgetContinueWatching(currentProfileId)
     }
 
     suspend fun clearWatchHistory() {
         val currentProfileId = profileStore?.activeProfileFlow?.firstOrNull()?.id
             ?: ProfileStore.DEFAULT_PROFILE_ID
         historyStore?.clearProfile(currentProfileId)
+        syncWidgetContinueWatching(currentProfileId)
+    }
+
+    private suspend fun syncWidgetContinueWatching(profileId: String) {
+        val ctx = appContext ?: return
+        val profileName = profileStore?.profilesFlow?.firstOrNull()
+            ?.firstOrNull { it.id == profileId }?.name ?: "Otaku"
+        val latestEntry = historyStore?.historyFlow?.firstOrNull()
+            ?.firstOrNull { it.profileId == profileId }
+        WidgetSnapshotStore.updateContinueWatching(
+            context = ctx,
+            profileName = profileName,
+            latestEntry = latestEntry
+        )
     }
 
     private fun buildJkDirectoryCandidateUrls(filter: DirectoryFilter): List<String> {

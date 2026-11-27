@@ -43,7 +43,7 @@ class WatchHistoryStore(private val context: Context) {
                     it.animeSlug == entry.animeSlug &&
                     it.episodeNumber == entry.episodeNumber
             }
-            val sameProfileEntries = filtered.filter { it.profileId == entry.profileId }.take(49)
+            val sameProfileEntries = filtered.filter { it.profileId == entry.profileId }.take(199)
             val otherProfileEntries = filtered.filter { it.profileId != entry.profileId }
             val updated = listOf(entry) + sameProfileEntries + otherProfileEntries
             prefs[historyKey] = json.encodeToString(updated)

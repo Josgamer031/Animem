@@ -41,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +54,7 @@ import com.example.model.AnimeProvider
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.ExploreLoadingSkeleton
 import com.example.ui.viewmodel.ScheduleUiState
 import com.example.ui.viewmodel.ScheduleViewModel
 
@@ -67,6 +70,7 @@ fun ScheduleScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val selectedProvider by viewModel.selectedProvider.collectAsStateWithLifecycle()
     val selectedDayIndex by viewModel.selectedDayIndex.collectAsStateWithLifecycle()
+    val haptics = LocalHapticFeedback.current
 
     Column(
         modifier = modifier
@@ -141,7 +145,10 @@ fun ScheduleScreen(
                     val isLatino = provider == AnimeProvider.LATANIME
                     FilterChip(
                         selected = selected,
-                        onClick = { viewModel.selectProvider(provider) },
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            viewModel.selectProvider(provider)
+                        },
                         leadingIcon = {
                             Icon(
                                 imageVector = if (isLatino) Icons.Rounded.Translate else Icons.Rounded.Subtitles,
@@ -190,12 +197,7 @@ fun ScheduleScreen(
         ) {
             when (val state = uiState) {
                 is ScheduleUiState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
+                    ExploreLoadingSkeleton()
                 }
 
                 is ScheduleUiState.Error -> {
@@ -234,7 +236,10 @@ fun ScheduleScreen(
                                     }
                                     FilterChip(
                                         selected = selected,
-                                        onClick = { viewModel.selectDay(index) },
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            viewModel.selectDay(index)
+                                        },
                                         label = {
                                             Text(
                                                 text = label,

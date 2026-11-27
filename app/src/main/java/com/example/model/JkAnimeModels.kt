@@ -175,6 +175,14 @@ data class AnimeSchedule(
 )
 
 @Serializable
+enum class WatchStatus(val label: String) {
+    WATCHING("Viendo"),
+    PLAN_TO_WATCH("Por ver"),
+    COMPLETED("Completados"),
+    DROPPED("Abandonados")
+}
+
+@Serializable
 data class FavoriteAnime(
     val animeSlug: String,
     val animeTitle: String,
@@ -184,7 +192,96 @@ data class FavoriteAnime(
     val totalEpisodesText: String = "",
     val providerId: String = AnimeProvider.JKANIME.id,
     val profileId: String = "default",
-    val addedAtMillis: Long = System.currentTimeMillis()
+    val addedAtMillis: Long = System.currentTimeMillis(),
+    val watchStatus: WatchStatus = WatchStatus.WATCHING
 )
+
+data class ProfileWatchStats(
+    val totalEpisodesWatched: Int = 0,
+    val uniqueAnimesWatched: Int = 0,
+    val totalWatchTimeMs: Long = 0L,
+    val watchingCount: Int = 0,
+    val planToWatchCount: Int = 0,
+    val completedCount: Int = 0,
+    val droppedCount: Int = 0,
+    val jkanimeEpisodesCount: Int = 0,
+    val latanimeEpisodesCount: Int = 0
+) {
+    val totalInList: Int
+        get() = watchingCount + planToWatchCount + completedCount + droppedCount
+}
+
+fun computeProfileWatchStats(
+    history: List<WatchHistoryEntry>,
+    favorites: List<FavoriteAnime>
+): ProfileWatchStats {
+    val distinctEpisodes = history.distinctBy { "${it.providerId}:${it.animeSlug}:${it.episodeNumber}" }
+    val uniqueAnimes = distinctEpisodes.distinctBy { "${it.providerId}:${it.animeSlug}" }.size
+    val totalMs = distinctEpisodes.sumOf { entry ->
+        when {
+            entry.positionMs > 0L -> entry.positionMs
+            entry.durationMs > 0L -> entry.durationMs
+            else -> 0L
+        }
+    }
+    return ProfileWatchStats(
+        totalEpisodesWatched = distinctEpisodes.size,
+        uniqueAnimesWatched = uniqueAnimes,
+        totalWatchTimeMs = totalMs,
+        watchingCount = favorites.count { it.watchStatus == WatchStatus.WATCHING },
+        planToWatchCount = favorites.count { it.watchStatus == WatchStatus.PLAN_TO_WATCH },
+        completedCount = favorites.count { it.watchStatus == WatchStatus.COMPLETED },
+        droppedCount = favorites.count { it.watchStatus == WatchStatus.DROPPED },
+        jkanimeEpisodesCount = distinctEpisodes.count { it.providerId == AnimeProvider.JKANIME.id },
+        latanimeEpisodesCount = distinctEpisodes.count { it.providerId == AnimeProvider.LATANIME.id }
+    )
+}
+
+fun formatWatchDuration(ms: Long): String {
+    if (ms <= 0L) return "0 min"
+    val totalMinutes = (ms / 60_000L).coerceAtLeast(1L)
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return when {
+        hours > 0L && minutes > 0L -> "${hours}h ${minutes}m"
+        hours > 0L -> "${hours}h"
+        else -> "${minutes} min"
+    }
+}
+
+sealed interface LaunchDeepLink {
+    data class OpenPlayer(
+        val slug: String,
+        val episodeNumber: Int,
+        val animeTitle: String = "",
+        val coverUrl: String = "",
+        val providerId: String = AnimeProvider.JKANIME.id,
+        val episodeUrl: String = ""
+    ) : LaunchDeepLink
+
+    data class OpenAnimeDetail(
+        val slug: String,
+        val providerId: String = AnimeProvider.JKANIME.id
+    ) : LaunchDeepLink
+}
+
+@Serializable
+enum class DeviceMode {
+    PHONE,
+    SMART_TV
+}
+
+@Serializable
+data class UserPreferences(
+    val autoPlayNext: Boolean = true,
+    val autoSkipOpening: Boolean = false,
+    val recentSearches: List<String> = emptyList(),
+    val deviceMode: DeviceMode = DeviceMode.PHONE,
+    val hasSelectedDeviceMode: Boolean = false,
+    val premiereAlertsEnabled: Boolean = false,
+    val notifiedPremiereKeys: List<String> = emptyList()
+)
+
+
 
 

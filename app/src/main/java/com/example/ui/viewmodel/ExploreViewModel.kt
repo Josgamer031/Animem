@@ -7,10 +7,14 @@ import com.example.data.JkAnimeRepository
 import com.example.model.AnimeProvider
 import com.example.model.AnimeSummary
 import com.example.model.DirectoryFilter
+import com.example.model.UserPreferences
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -34,15 +38,25 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     )
     val uiState: StateFlow<ExploreUiState> = _uiState.asStateFlow()
 
+    val recentSearches: StateFlow<List<String>> =
+        (repository.userPreferences ?: MutableStateFlow(UserPreferences()))
+            .map { it.recentSearches }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private var fetchJob: Job? = null
+    private var suppressNextProviderEmission = false
 
     init {
+        val initialPending = repository.pendingExploreGenre.value
+        if (initialPending != null) {
+            suppressNextProviderEmission = true
+        }
         viewModelScope.launch {
             repository.selectedProvider
                 .collect { provider ->
                     val pending = repository.pendingExploreGenre.value
-                    if (pending != null && pending.first == provider) {
-                        // Let pendingExploreGenre collector trigger the filtered fetch cleanly
+                    if (suppressNextProviderEmission || (pending != null && pending.first == provider)) {
+                        suppressNextProviderEmission = false
                         return@collect
                     }
                     _uiState.update {
@@ -94,7 +108,37 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     }
 
     fun submitSearch() {
+        val q = _uiState.value.filter.query.trim()
+        if (q.isNotBlank()) {
+            viewModelScope.launch {
+                repository.recordSearchQuery(q)
+            }
+        }
         searchOrFilter(resetPage = true)
+    }
+
+    fun applyRecentSearch(query: String) {
+        _uiState.update {
+            it.copy(
+                filter = it.filter.copy(
+                    query = query,
+                    page = 1
+                )
+            )
+        }
+        submitSearch()
+    }
+
+    fun removeRecentSearch(query: String) {
+        viewModelScope.launch {
+            repository.removeSearchQuery(query)
+        }
+    }
+
+    fun clearRecentSearches() {
+        viewModelScope.launch {
+            repository.clearSearchQueries()
+        }
     }
 
     fun selectStatus(status: String) {
@@ -114,11 +158,13 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     fun selectGenre(genre: String) {
         val next = if (_uiState.value.filter.genre == genre) "" else genre
         _uiState.update {
+            val isJk = it.filter.provider == AnimeProvider.JKANIME
             it.copy(
                 filter = it.filter.copy(
                     genre = next,
-                    status = if (it.filter.provider == AnimeProvider.JKANIME) "" else it.filter.status,
-                    type = if (it.filter.provider == AnimeProvider.JKANIME) "" else it.filter.type
+                    query = if (isJk && next.isNotBlank()) "" else it.filter.query,
+                    status = if (isJk) "" else it.filter.status,
+                    type = if (isJk) "" else it.filter.type
                 )
             )
         }

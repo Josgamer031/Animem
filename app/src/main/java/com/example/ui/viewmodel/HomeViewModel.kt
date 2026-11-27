@@ -5,8 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.CloudflareBlockedException
 import com.example.data.JkAnimeRepository
 import com.example.model.AnimeProvider
+import com.example.model.AnimeSummary
+import com.example.model.DeviceMode
 import com.example.model.FavoriteAnime
 import com.example.model.HomeFeed
+import com.example.model.UserPreferences
 import com.example.model.UserProfile
 import com.example.model.WatchHistoryEntry
 import kotlinx.coroutines.Job
@@ -33,6 +36,14 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
     val selectedProvider: StateFlow<AnimeProvider> = repository.selectedProvider
+
+    val userPreferences: StateFlow<UserPreferences> =
+        (repository.userPreferences ?: MutableStateFlow(UserPreferences()))
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                UserPreferences()
+            )
 
     val profiles: StateFlow<List<UserProfile>> =
         (repository.profiles ?: MutableStateFlow(listOf(UserProfile("default", "Otaku", "kitsune"))))
@@ -82,6 +93,44 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
         if (repository.selectedProvider.value == provider) return
         _uiState.value = HomeUiState.Loading
         repository.setSelectedProvider(provider)
+    }
+
+    fun setAutoPlayNext(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setAutoPlayNext(enabled)
+        }
+    }
+
+    fun setAutoSkipOpening(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setAutoSkipOpening(enabled)
+        }
+    }
+
+    fun setDeviceMode(mode: DeviceMode) {
+        viewModelScope.launch {
+            repository.setDeviceMode(mode, markSelected = true)
+        }
+    }
+
+    fun setPremiereAlertsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setPremiereAlertsEnabled(enabled)
+        }
+    }
+
+    fun pickRandomAnime(): AnimeSummary? {
+        val feed = (_uiState.value as? HomeUiState.Success)?.feed ?: return null
+        val pool = (feed.featured + feed.airing + feed.recentAdded).distinctBy { it.slug }
+        if (pool.isNotEmpty()) return pool.random()
+        val ep = feed.latestEpisodes.randomOrNull() ?: return null
+        return AnimeSummary(
+            slug = ep.animeSlug,
+            title = ep.animeTitle,
+            url = "${ep.provider.baseUrl}/${ep.animeSlug}/",
+            coverUrl = ep.coverUrl,
+            provider = ep.provider
+        )
     }
 
     fun createProfile(name: String, avatarKey: String) {
