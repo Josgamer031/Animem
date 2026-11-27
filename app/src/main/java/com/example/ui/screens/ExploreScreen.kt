@@ -1,10 +1,15 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +29,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -75,10 +81,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.model.AnimeProvider
+import com.example.ui.components.AnimatedProviderSwitcher
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.ErrorStateView
 import com.example.ui.components.ExploreLoadingSkeleton
+import com.example.ui.components.StaggeredReveal
+import com.example.ui.components.posterSharedKey
 import com.example.ui.viewmodel.ExploreViewModel
 
 private val STATUS_OPTIONS = listOf(
@@ -233,55 +242,11 @@ fun ExploreScreen(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                AnimeProvider.entries.forEach { provider ->
-                    val selected = state.filter.provider == provider
-                    val isLatino = provider == AnimeProvider.LATANIME
-                    FilterChip(
-                        selected = selected,
-                        onClick = { viewModel.selectProvider(provider) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = if (isLatino) Icons.Rounded.Translate else Icons.Rounded.Subtitles,
-                                contentDescription = null,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = "${provider.displayName} · ${provider.shortLabel}",
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = if (isLatino) {
-                                MaterialTheme.colorScheme.secondary
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                            selectedLabelColor = if (isLatino) {
-                                MaterialTheme.colorScheme.onSecondary
-                            } else {
-                                Color.White
-                            },
-                            selectedLeadingIconColor = if (isLatino) {
-                                MaterialTheme.colorScheme.onSecondary
-                            } else {
-                                Color.White
-                            }
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
-                            .testTag("explore_provider_${provider.id}")
-                    )
-                }
-            }
+            AnimatedProviderSwitcher(
+                selectedProvider = state.filter.provider,
+                onSelectProvider = viewModel::selectProvider,
+                tagPrefix = "explore_provider"
+            )
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -640,104 +605,121 @@ fun ExploreScreen(
             Spacer(modifier = Modifier.height(6.dp))
         }
 
-        // Results Grid / States
-        when {
-            state.isLoading && state.items.isEmpty() -> {
-                ExploreLoadingSkeleton()
-            }
-            state.errorMessage != null && state.items.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    ErrorStateView(
-                        message = state.errorMessage.orEmpty(),
-                        onRetry = { viewModel.searchOrFilter(resetPage = true) },
-                        onUnlockCloudflare = state.blockedUrl?.let { blocked ->
-                            {
-                                onUnlockCloudflare(blocked) {
-                                    viewModel.searchOrFilter(resetPage = true)
-                                }
-                            }
-                        }
-                    )
+        // Results Grid / States with animated provider transition
+        AnimatedContent(
+            targetState = state.filter.provider,
+            transitionSpec = {
+                val forward = targetState.ordinal > initialState.ordinal
+                (slideInHorizontally(tween(240)) { if (forward) it / 8 else -it / 8 } + fadeIn(tween(220))) togetherWith
+                    (slideOutHorizontally(tween(180)) { if (forward) -it / 10 else it / 10 } + fadeOut(tween(180)))
+            },
+            label = "explore_provider_transition",
+            modifier = Modifier.fillMaxSize()
+        ) { _ ->
+            when {
+                state.isLoading && state.items.isEmpty() -> {
+                    ExploreLoadingSkeleton()
                 }
-            }
-            state.items.isEmpty() -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                state.errorMessage != null && state.items.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        EmptyStateView(
-                            title = stringResource(R.string.empty_search_title),
-                            subtitle = stringResource(R.string.empty_search_subtitle)
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (hasActiveFilters) {
-                                OutlinedButton(
-                                    onClick = viewModel::clearAllFilters,
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Text(text = stringResource(R.string.clear_filters))
+                        ErrorStateView(
+                            message = state.errorMessage.orEmpty(),
+                            onRetry = { viewModel.searchOrFilter(resetPage = true) },
+                            onUnlockCloudflare = state.blockedUrl?.let { blocked ->
+                                {
+                                    onUnlockCloudflare(blocked) {
+                                        viewModel.searchOrFilter(resetPage = true)
+                                    }
                                 }
                             }
-                            Button(
-                                onClick = { viewModel.searchOrFilter(resetPage = true) },
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .testTag("explore_empty_retry_button")
-                            ) {
-                                Text(text = stringResource(R.string.retry))
+                        )
+                    }
+                }
+                state.items.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            EmptyStateView(
+                                title = stringResource(R.string.empty_search_title),
+                                subtitle = stringResource(R.string.empty_search_subtitle)
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                if (hasActiveFilters) {
+                                    OutlinedButton(
+                                        onClick = viewModel::clearAllFilters,
+                                        modifier = Modifier.height(48.dp)
+                                    ) {
+                                        Text(text = stringResource(R.string.clear_filters))
+                                    }
+                                }
+                                Button(
+                                    onClick = { viewModel.searchOrFilter(resetPage = true) },
+                                    modifier = Modifier
+                                        .height(48.dp)
+                                        .testTag("explore_empty_retry_button")
+                                ) {
+                                    Text(text = stringResource(R.string.retry))
+                                }
                             }
                         }
                     }
                 }
-            }
-            else -> {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(136.dp),
-                    contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(state.items, key = { "${it.provider.id}_${it.slug}" }) { anime ->
-                        AnimePosterCard(
-                            title = anime.title,
-                            coverUrl = anime.coverUrl,
-                            badge = anime.type.ifBlank { anime.status.ifBlank { anime.provider.badgeText } },
-                            subtitle = anime.episodeBadge.ifBlank { anime.status.ifBlank { anime.provider.shortLabel } },
-                            onClick = { onOpenAnime(anime.slug, anime.provider.id) },
-                            modifier = Modifier.animateItem(),
-                            testTag = "explore_card_${anime.slug}"
-                        )
-                    }
+                else -> {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(136.dp),
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        itemsIndexed(
+                            items = state.items,
+                            key = { _, anime -> "${anime.provider.id}_${anime.slug}" }
+                        ) { index, anime ->
+                            StaggeredReveal(index = index, maxStaggerItems = 8) {
+                                AnimePosterCard(
+                                    title = anime.title,
+                                    coverUrl = anime.coverUrl,
+                                    badge = anime.type.ifBlank { anime.status.ifBlank { anime.provider.badgeText } },
+                                    subtitle = anime.episodeBadge.ifBlank { anime.status.ifBlank { anime.provider.shortLabel } },
+                                    sharedElementKey = posterSharedKey(anime.provider.id, anime.slug),
+                                    onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                                    modifier = Modifier.animateItem(),
+                                    testTag = "explore_card_${anime.slug}"
+                                )
+                            }
+                        }
 
-                    if (state.hasNextPage) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 12.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (state.isLoadingMore) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(32.dp),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                } else {
-                                    OutlinedButton(
-                                        onClick = { viewModel.loadNextPage() },
-                                        modifier = Modifier
-                                            .height(48.dp)
-                                            .testTag("explore_load_more")
-                                    ) {
-                                        Text(text = stringResource(R.string.load_more))
+                        if (state.hasNextPage) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (state.isLoadingMore) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(32.dp),
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = { viewModel.loadNextPage() },
+                                            modifier = Modifier
+                                                .height(48.dp)
+                                                .testTag("explore_load_more")
+                                        ) {
+                                            Text(text = stringResource(R.string.load_more))
+                                        }
                                     }
                                 }
                             }

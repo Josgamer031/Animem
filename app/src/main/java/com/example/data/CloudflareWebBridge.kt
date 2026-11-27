@@ -59,9 +59,10 @@ class CloudflareWebBridge(
     @SuppressLint("SetJavaScriptEnabled")
     fun obtainOrCreateWebView(context: Context): WebView? {
         if (rendererDisabled) return null
-        webView?.let {
-            if (!webViewAttachedSignal.isCompleted) webViewAttachedSignal.complete(it)
-            return it
+        webView?.let { existing ->
+            (existing.parent as? ViewGroup)?.removeView(existing)
+            if (!webViewAttachedSignal.isCompleted) webViewAttachedSignal.complete(existing)
+            return existing
         }
 
         return try {

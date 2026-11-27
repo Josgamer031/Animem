@@ -73,6 +73,7 @@ fun AnimePosterCard(
     subtitle: String = "",
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    sharedElementKey: String? = null,
     testTag: String = "anime_poster_card"
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -88,6 +89,7 @@ fun AnimePosterCard(
 
     Surface(
         modifier = modifier
+            .kitsuneSharedPoster(sharedElementKey)
             .tvFocusHighlight(shape = MaterialTheme.shapes.medium)
             .graphicsLayer {
                 scaleX = pressScale

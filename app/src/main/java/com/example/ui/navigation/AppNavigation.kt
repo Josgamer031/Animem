@@ -98,6 +98,8 @@ import com.example.ui.viewmodel.PlayerViewModel
 import com.example.ui.viewmodel.ScheduleViewModel
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -107,6 +109,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -114,6 +117,8 @@ import androidx.compose.ui.platform.LocalContext
 import com.example.model.DeviceMode
 import com.example.model.UserPreferences
 import com.example.model.UserProfile
+import com.example.ui.components.LocalAnimatedVisibilityScope
+import com.example.ui.components.LocalSharedTransitionScope
 import com.example.ui.screens.LaunchProfileGateScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -568,165 +573,176 @@ private fun KitsuneMainShell(
                         }
                     }
 
-                    NavHost(
-                        navController = navController,
-                        startDestination = HomeRoute,
-                        enterTransition = { fadeIn(tween(240)) },
-                        exitTransition = { fadeOut(tween(180)) },
-                        popEnterTransition = { fadeIn(tween(220)) },
-                        popExitTransition = { fadeOut(tween(180)) },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        composable<HomeRoute> {
-                            val vm: HomeViewModel = viewModel(
-                                factory = JkAnimeViewModelFactory(repository)
-                            )
-                            HomeScreen(
-                                viewModel = vm,
-                                onOpenAnime = { slug, providerId ->
-                                    navController.navigate(AnimeDetailRoute(slug, providerId))
-                                },
-                                onPlayEpisode = { slug, ep, title, cover, providerId, epUrl ->
-                                    navController.navigate(
-                                        PlayerRoute(
-                                            slug = slug,
-                                            episodeNumber = ep,
-                                            animeTitle = title,
-                                            coverUrl = cover,
-                                            providerId = providerId,
-                                            episodeUrl = epUrl
+                    @OptIn(ExperimentalSharedTransitionApi::class)
+                    SharedTransitionLayout(modifier = Modifier.weight(1f)) {
+                        CompositionLocalProvider(LocalSharedTransitionScope provides this) {
+                            NavHost(
+                                navController = navController,
+                                startDestination = HomeRoute,
+                                enterTransition = { fadeIn(tween(240)) },
+                                exitTransition = { fadeOut(tween(180)) },
+                                popEnterTransition = { fadeIn(tween(220)) },
+                                popExitTransition = { fadeOut(tween(180)) },
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                composable<HomeRoute> {
+                                    CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                        val vm: HomeViewModel = viewModel(
+                                            factory = JkAnimeViewModelFactory(repository)
+                                        )
+                                        HomeScreen(
+                                            viewModel = vm,
+                                            onOpenAnime = { slug, providerId ->
+                                                navController.navigate(AnimeDetailRoute(slug, providerId))
+                                            },
+                                            onPlayEpisode = { slug, ep, title, cover, providerId, epUrl ->
+                                                navController.navigate(
+                                                    PlayerRoute(
+                                                        slug = slug,
+                                                        episodeNumber = ep,
+                                                        animeTitle = title,
+                                                        coverUrl = cover,
+                                                        providerId = providerId,
+                                                        episodeUrl = epUrl
+                                                    )
+                                                )
+                                            },
+                                            onOpenSearch = { navigateTopLevel(ExploreRoute) },
+                                            onOpenExplore = { navigateTopLevel(ExploreRoute) },
+                                            onUnlockCloudflare = openCloudflareUnlock,
+                                            onShowTvShortcuts = { showTvShortcutsDialog = true },
+                                            modifier = Modifier.statusBarsPadding()
+                                        )
+                                    }
+                                }
+
+                                composable<ExploreRoute> {
+                                    CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                        val vm: ExploreViewModel = viewModel(
+                                            factory = JkAnimeViewModelFactory(repository)
+                                        )
+                                        ExploreScreen(
+                                            viewModel = vm,
+                                            onOpenAnime = { slug, providerId ->
+                                                navController.navigate(AnimeDetailRoute(slug, providerId))
+                                            },
+                                            onUnlockCloudflare = openCloudflareUnlock,
+                                            modifier = Modifier.statusBarsPadding()
+                                        )
+                                    }
+                                }
+
+                                composable<ScheduleRoute> {
+                                    CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                        val vm: ScheduleViewModel = viewModel(
+                                            factory = JkAnimeViewModelFactory(repository)
+                                        )
+                                        ScheduleScreen(
+                                            viewModel = vm,
+                                            onOpenAnime = { slug, providerId ->
+                                                navController.navigate(AnimeDetailRoute(slug, providerId))
+                                            },
+                                            onUnlockCloudflare = openCloudflareUnlock,
+                                            modifier = Modifier.statusBarsPadding()
+                                        )
+                                    }
+                                }
+
+                                composable<HistoryRoute> {
+                                    CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                        val vm: HistoryViewModel = viewModel(
+                                            factory = JkAnimeViewModelFactory(repository)
+                                        )
+                                        HistoryScreen(
+                                            viewModel = vm,
+                                            onPlayEpisode = { slug, ep, title, cover, providerId, epUrl ->
+                                                navController.navigate(
+                                                    PlayerRoute(
+                                                        slug = slug,
+                                                        episodeNumber = ep,
+                                                        animeTitle = title,
+                                                        coverUrl = cover,
+                                                        providerId = providerId,
+                                                        episodeUrl = epUrl
+                                                    )
+                                                )
+                                            },
+                                            onOpenAnime = { slug, providerId ->
+                                                navController.navigate(AnimeDetailRoute(slug, providerId))
+                                            },
+                                            modifier = Modifier.statusBarsPadding()
+                                        )
+                                    }
+                                }
+
+                                composable<AnimeDetailRoute>(
+                                    enterTransition = { fadeIn(tween(260)) },
+                                    exitTransition = { fadeOut(tween(200)) },
+                                    popEnterTransition = { fadeIn(tween(240)) },
+                                    popExitTransition = { fadeOut(tween(220)) }
+                                ) { entry ->
+                                    CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                        val route: AnimeDetailRoute = entry.toRoute()
+                                        val vm: AnimeDetailViewModel = viewModel(
+                                            factory = JkAnimeViewModelFactory(
+                                                repository = repository,
+                                                slug = route.slug,
+                                                providerId = route.providerId
+                                            )
+                                        )
+                                        AnimeDetailScreen(
+                                            viewModel = vm,
+                                            onBack = { navController.popBackStack() },
+                                            onPlayEpisode = { slug, ep, title, cover, providerId, epUrl ->
+                                                navController.navigate(
+                                                    PlayerRoute(
+                                                        slug = slug,
+                                                        episodeNumber = ep,
+                                                        animeTitle = title,
+                                                        coverUrl = cover,
+                                                        providerId = providerId,
+                                                        episodeUrl = epUrl
+                                                    )
+                                                )
+                                            },
+                                            onNavigateToGenreExplore = { navigateTopLevel(ExploreRoute) },
+                                            onUnlockCloudflare = openCloudflareUnlock
+                                        )
+                                    }
+                                }
+
+                                composable<PlayerRoute>(
+                                    enterTransition = {
+                                        slideInHorizontally(tween(280)) { it / 3 } + fadeIn(tween(240))
+                                    },
+                                    exitTransition = { fadeOut(tween(180)) },
+                                    popEnterTransition = { fadeIn(tween(220)) },
+                                    popExitTransition = {
+                                        slideOutHorizontally(tween(240)) { it / 3 } + fadeOut(tween(200))
+                                    }
+                                ) { entry ->
+                                    val route: PlayerRoute = entry.toRoute()
+                                    val vm: PlayerViewModel = viewModel(
+                                        factory = JkAnimeViewModelFactory(
+                                            repository = repository,
+                                            slug = route.slug,
+                                            episodeNumber = route.episodeNumber,
+                                            animeTitle = route.animeTitle,
+                                            coverUrl = route.coverUrl,
+                                            providerId = route.providerId,
+                                            episodeUrl = route.episodeUrl
                                         )
                                     )
-                                },
-                                onOpenSearch = { navigateTopLevel(ExploreRoute) },
-                                onOpenExplore = { navigateTopLevel(ExploreRoute) },
-                                onUnlockCloudflare = openCloudflareUnlock,
-                                onShowTvShortcuts = { showTvShortcutsDialog = true },
-                                modifier = Modifier.statusBarsPadding()
-                            )
-                        }
-
-                        composable<ExploreRoute> {
-                            val vm: ExploreViewModel = viewModel(
-                                factory = JkAnimeViewModelFactory(repository)
-                            )
-                            ExploreScreen(
-                                viewModel = vm,
-                                onOpenAnime = { slug, providerId ->
-                                    navController.navigate(AnimeDetailRoute(slug, providerId))
-                                },
-                                onUnlockCloudflare = openCloudflareUnlock,
-                                modifier = Modifier.statusBarsPadding()
-                            )
-                        }
-
-                        composable<ScheduleRoute> {
-                            val vm: ScheduleViewModel = viewModel(
-                                factory = JkAnimeViewModelFactory(repository)
-                            )
-                            ScheduleScreen(
-                                viewModel = vm,
-                                onOpenAnime = { slug, providerId ->
-                                    navController.navigate(AnimeDetailRoute(slug, providerId))
-                                },
-                                onUnlockCloudflare = openCloudflareUnlock,
-                                modifier = Modifier.statusBarsPadding()
-                            )
-                        }
-
-                        composable<HistoryRoute> {
-                            val vm: HistoryViewModel = viewModel(
-                                factory = JkAnimeViewModelFactory(repository)
-                            )
-                            HistoryScreen(
-                                viewModel = vm,
-                                onPlayEpisode = { slug, ep, title, cover, providerId, epUrl ->
-                                    navController.navigate(
-                                        PlayerRoute(
-                                            slug = slug,
-                                            episodeNumber = ep,
-                                            animeTitle = title,
-                                            coverUrl = cover,
-                                            providerId = providerId,
-                                            episodeUrl = epUrl
-                                        )
+                                    PlayerScreen(
+                                        viewModel = vm,
+                                        okHttpClient = repository.httpClient.okHttpClient,
+                                        isTvMode = isTvMode,
+                                        onSwitchDeviceMode = onSwitchDeviceMode,
+                                        onBack = { navController.popBackStack() },
+                                        onUnlockCloudflare = openCloudflareUnlock
                                     )
-                                },
-                                onOpenAnime = { slug, providerId ->
-                                    navController.navigate(AnimeDetailRoute(slug, providerId))
-                                },
-                                modifier = Modifier.statusBarsPadding()
-                            )
-                        }
-
-                        composable<AnimeDetailRoute>(
-                            enterTransition = {
-                                slideInHorizontally(tween(280)) { it / 4 } + fadeIn(tween(240))
-                            },
-                            exitTransition = { fadeOut(tween(180)) },
-                            popEnterTransition = { fadeIn(tween(220)) },
-                            popExitTransition = {
-                                slideOutHorizontally(tween(240)) { it / 4 } + fadeOut(tween(200))
+                                }
                             }
-                        ) { entry ->
-                            val route: AnimeDetailRoute = entry.toRoute()
-                            val vm: AnimeDetailViewModel = viewModel(
-                                factory = JkAnimeViewModelFactory(
-                                    repository = repository,
-                                    slug = route.slug,
-                                    providerId = route.providerId
-                                )
-                            )
-                            AnimeDetailScreen(
-                                viewModel = vm,
-                                onBack = { navController.popBackStack() },
-                                onPlayEpisode = { slug, ep, title, cover, providerId, epUrl ->
-                                    navController.navigate(
-                                        PlayerRoute(
-                                            slug = slug,
-                                            episodeNumber = ep,
-                                            animeTitle = title,
-                                            coverUrl = cover,
-                                            providerId = providerId,
-                                            episodeUrl = epUrl
-                                        )
-                                    )
-                                },
-                                onNavigateToGenreExplore = { navigateTopLevel(ExploreRoute) },
-                                onUnlockCloudflare = openCloudflareUnlock
-                            )
-                        }
-
-                        composable<PlayerRoute>(
-                            enterTransition = {
-                                slideInHorizontally(tween(280)) { it / 3 } + fadeIn(tween(240))
-                            },
-                            exitTransition = { fadeOut(tween(180)) },
-                            popEnterTransition = { fadeIn(tween(220)) },
-                            popExitTransition = {
-                                slideOutHorizontally(tween(240)) { it / 3 } + fadeOut(tween(200))
-                            }
-                        ) { entry ->
-                            val route: PlayerRoute = entry.toRoute()
-                            val vm: PlayerViewModel = viewModel(
-                                factory = JkAnimeViewModelFactory(
-                                    repository = repository,
-                                    slug = route.slug,
-                                    episodeNumber = route.episodeNumber,
-                                    animeTitle = route.animeTitle,
-                                    coverUrl = route.coverUrl,
-                                    providerId = route.providerId,
-                                    episodeUrl = route.episodeUrl
-                                )
-                            )
-                            PlayerScreen(
-                                viewModel = vm,
-                                okHttpClient = repository.httpClient.okHttpClient,
-                                isTvMode = isTvMode,
-                                onSwitchDeviceMode = onSwitchDeviceMode,
-                                onBack = { navController.popBackStack() },
-                                onUnlockCloudflare = openCloudflareUnlock
-                            )
                         }
                     }
                 }

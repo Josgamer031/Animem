@@ -11,18 +11,27 @@ import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -35,6 +44,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -104,7 +114,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -152,6 +164,7 @@ import com.example.ui.viewmodel.PlayerViewModel
 import com.example.ui.viewmodel.ServerPlaybackSupport
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.Locale
 
@@ -810,6 +823,11 @@ private fun NativeExoPlayerBox(
     var retriedTransient by remember(streamUrl) { mutableStateOf(false) }
     var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
+    var doubleTapSeq by remember { mutableIntStateOf(0) }
+    var scrubTargetFraction by remember { mutableStateOf<Float?>(null) }
+    val scrubInteractionSource = remember { MutableInteractionSource() }
+    val isScrubDragged by scrubInteractionSource.collectIsDraggedAsState()
+    val isScrubbing = isScrubDragged || scrubTargetFraction != null
     var nextCountdownSec by remember(streamUrl) { mutableIntStateOf(5) }
     var autoNextCancelled by remember(streamUrl) { mutableStateOf(false) }
     var autoSkippedOpening by remember(streamUrl) { mutableStateOf(false) }
@@ -979,10 +997,10 @@ private fun NativeExoPlayerBox(
     }
 
     // Auto-hide ExoPlayer controls (and Skip Opening/Ending inside it) after 3.5s
-    LaunchedEffect(controlsVisible, isPlaying, isControlsLocked) {
+    LaunchedEffect(controlsVisible, isPlaying, isControlsLocked, isScrubbing) {
         if (isControlsLocked) {
             controlsVisible = false
-        } else if (controlsVisible && isPlaying) {
+        } else if (controlsVisible && isPlaying && !isScrubbing) {
             delay(3_500L)
             controlsVisible = false
         }
@@ -997,9 +1015,9 @@ private fun NativeExoPlayerBox(
     }
 
     // Auto-clear double-tap feedback badge
-    LaunchedEffect(doubleTapFeedback) {
+    LaunchedEffect(doubleTapFeedback, doubleTapSeq) {
         if (doubleTapFeedback != null) {
-            delay(700L)
+            delay(760L)
             doubleTapFeedback = null
         }
     }
@@ -1068,6 +1086,7 @@ private fun NativeExoPlayerBox(
                         exoPlayer.seekTo(target)
                         currentPos = target
                         doubleTapFeedback = "-10s"
+                        doubleTapSeq++
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -1076,6 +1095,7 @@ private fun NativeExoPlayerBox(
                             exoPlayer.seekTo(target)
                             currentPos = target
                             doubleTapFeedback = "-10s"
+                            doubleTapSeq++
                             true
                         } else {
                             false
@@ -1087,6 +1107,7 @@ private fun NativeExoPlayerBox(
                         exoPlayer.seekTo(target)
                         currentPos = target
                         doubleTapFeedback = "+10s"
+                        doubleTapSeq++
                         true
                     }
                     AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
@@ -1096,6 +1117,7 @@ private fun NativeExoPlayerBox(
                             exoPlayer.seekTo(target)
                             currentPos = target
                             doubleTapFeedback = "+10s"
+                            doubleTapSeq++
                             true
                         } else {
                             false
@@ -1160,6 +1182,7 @@ private fun NativeExoPlayerBox(
                     },
                     onDoubleTap = { offset ->
                         if (isControlsLocked) return@detectTapGestures
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         val isLeftHalf = offset.x < size.width / 2f
                         if (isLeftHalf) {
                             val target = (exoPlayer.currentPosition - 10_000L).coerceAtLeast(0L)
@@ -1173,6 +1196,7 @@ private fun NativeExoPlayerBox(
                             currentPos = target
                             doubleTapFeedback = "+10s"
                         }
+                        doubleTapSeq++
                     }
                 )
             }
@@ -1211,43 +1235,98 @@ private fun NativeExoPlayerBox(
             )
         }
 
-        // Double-tap seek feedback badge
+        // Double-tap seek feedback with expanding ripple wave
+        val rippleScale = remember { Animatable(0.45f) }
+        val rippleAlpha = remember { Animatable(0f) }
+        LaunchedEffect(doubleTapSeq, doubleTapFeedback) {
+            if (doubleTapFeedback != null && doubleTapSeq > 0) {
+                rippleScale.snapTo(0.42f)
+                rippleAlpha.snapTo(0.65f)
+                launch {
+                    rippleScale.animateTo(
+                        targetValue = 1.55f,
+                        animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing)
+                    )
+                }
+                rippleAlpha.animateTo(
+                    targetValue = 0f,
+                    animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing)
+                )
+            }
+        }
+
         AnimatedVisibility(
             visible = doubleTapFeedback != null && !isInPipMode,
-            enter = fadeIn() + scaleIn(initialScale = 0.85f),
-            exit = fadeOut() + scaleOut(targetScale = 0.9f),
-            modifier = Modifier
-                .align(
-                    if (doubleTapFeedback == "-10s") Alignment.CenterStart else Alignment.CenterEnd
-                )
-                .padding(horizontal = 36.dp)
+            enter = fadeIn(tween(120)) + scaleIn(initialScale = 0.82f),
+            exit = fadeOut(tween(180)) + scaleOut(targetScale = 0.92f),
+            modifier = Modifier.fillMaxSize()
         ) {
-            Surface(
-                color = Color(0xCC0B0D14),
-                shape = CircleShape,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            val isRewind = doubleTapFeedback == "-10s"
+            val primaryColor = MaterialTheme.colorScheme.primary
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Soft side radial/horizontal aura
+                Box(
+                    modifier = Modifier
+                        .align(if (isRewind) Alignment.CenterStart else Alignment.CenterEnd)
+                        .fillMaxSize(0.45f)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = if (isRewind) {
+                                    listOf(primaryColor.copy(alpha = 0.22f), Color.Transparent)
+                                } else {
+                                    listOf(Color.Transparent, primaryColor.copy(alpha = 0.22f))
+                                }
+                            )
+                        )
+                )
+
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .align(if (isRewind) Alignment.CenterStart else Alignment.CenterEnd)
+                        .padding(horizontal = 42.dp)
+                        .size(118.dp)
                 ) {
-                    Icon(
-                        imageVector = if (doubleTapFeedback == "-10s") {
-                            Icons.Rounded.Replay10
-                        } else {
-                            Icons.Rounded.Forward10
-                        },
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        text = doubleTapFeedback.orEmpty(),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val baseRadius = size.minDimension * 0.42f
+                        drawCircle(
+                            color = primaryColor.copy(alpha = rippleAlpha.value * 0.32f),
+                            radius = baseRadius * rippleScale.value
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = rippleAlpha.value * 0.65f),
+                            radius = baseRadius * rippleScale.value,
+                            style = Stroke(width = 2.5.dp.toPx())
+                        )
+                    }
+                    Surface(
+                        color = Color(0xD80A0D16),
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.85f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isRewind) {
+                                    Icons.Rounded.Replay10
+                                } else {
+                                    Icons.Rounded.Forward10
+                                },
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Text(
+                                text = doubleTapFeedback.orEmpty(),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1406,7 +1485,14 @@ private fun NativeExoPlayerBox(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0x78000000))
+                    .background(
+                        Brush.verticalGradient(
+                            0.0f to Color(0xD805070E),
+                            0.28f to Color(0x3605070E),
+                            0.68f to Color(0x3605070E),
+                            1.0f to Color(0xE205070E)
+                        )
+                    )
                     .let { if (isFullscreen) it.displayCutoutPadding() else it }
                     .padding(12.dp)
             ) {
@@ -1771,11 +1857,63 @@ private fun NativeExoPlayerBox(
                 }
 
                 // Bottom Scrub Bar, Fullscreen & TV Shortcut Hint
+                val displayFraction = scrubTargetFraction ?: if (duration > 0L) {
+                    (currentPos.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                val displayedTimeMs = if (duration > 0L && scrubTargetFraction != null) {
+                    (scrubTargetFraction!! * duration).toLong()
+                } else {
+                    currentPos
+                }
+                val trackHeight by animateDpAsState(
+                    targetValue = if (isScrubbing) 7.dp else 3.5.dp,
+                    animationSpec = tween(160),
+                    label = "scrub_track_height"
+                )
+                val thumbSize by animateDpAsState(
+                    targetValue = if (isScrubbing) 18.dp else 11.dp,
+                    animationSpec = tween(160),
+                    label = "scrub_thumb_size"
+                )
+                val trackGlowAlpha by animateFloatAsState(
+                    targetValue = if (isScrubbing) 0.45f else 0f,
+                    animationSpec = tween(160),
+                    label = "scrub_glow_alpha"
+                )
+
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                 ) {
+                    AnimatedVisibility(
+                        visible = isScrubbing && duration > 0L,
+                        enter = fadeIn(tween(120)) + scaleIn(initialScale = 0.92f),
+                        exit = fadeOut(tween(150)),
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(bottom = 4.dp)
+                    ) {
+                        Surface(
+                            color = Color(0xEA0B0F1A),
+                            shape = CircleShape,
+                            border = BorderStroke(
+                                1.dp,
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+                            )
+                        ) {
+                            Text(
+                                text = "${formatDuration(displayedTimeMs)} / ${formatDuration(duration)}",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+
                     if (isTvMode) {
                         Text(
                             text = "Control TV: OK Pausa · ◀/▶ ±10s · ▲ Episodios · Rojo/S Omitir OP · CH± Ep · Azul/F Cine · Menú Atajos",
@@ -1791,32 +1929,85 @@ private fun NativeExoPlayerBox(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = formatDuration(currentPos),
+                            text = formatDuration(displayedTimeMs),
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White
+                            fontWeight = if (isScrubbing) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isScrubbing) MaterialTheme.colorScheme.primary else Color.White
                         )
-                        Slider(
-                            value = if (duration > 0L) (currentPos.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f,
-                            onValueChange = { fraction ->
-                                if (duration > 0L) {
-                                    val target = (fraction * duration).toLong()
-                                    currentPos = target
-                                    exoPlayer.seekTo(target)
-                                }
-                            },
-                            colors = SliderDefaults.colors(
-                                thumbColor = MaterialTheme.colorScheme.primary,
-                                activeTrackColor = MaterialTheme.colorScheme.primary,
-                                inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                            ),
+                        BoxWithConstraints(
+                            contentAlignment = Alignment.CenterStart,
                             modifier = Modifier
                                 .weight(1f)
+                                .height(36.dp)
                                 .padding(horizontal = 8.dp)
-                        )
+                        ) {
+                            val totalWidth = maxWidth
+                            // Subtle outer glow track while scrubbing
+                            if (trackGlowAlpha > 0.01f) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(displayFraction.coerceIn(0f, 1f))
+                                        .height(trackHeight + 6.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = trackGlowAlpha))
+                                )
+                            }
+                            // Inactive track
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(trackHeight)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = if (isScrubbing) 0.36f else 0.24f))
+                            )
+                            // Active progress track
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(displayFraction.coerceIn(0f, 1f))
+                                    .height(trackHeight)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            // Expanding thumb
+                            val thumbOffsetX = ((totalWidth - thumbSize) * displayFraction.coerceIn(0f, 1f))
+                                .coerceAtLeast(0.dp)
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = thumbOffsetX)
+                                    .size(thumbSize)
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                                    .padding(2.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            // Transparent M3 Slider preserves drag, tap, D-pad, and TalkBack semantics
+                            Slider(
+                                value = displayFraction,
+                                onValueChange = { fraction ->
+                                    if (duration > 0L) {
+                                        scrubTargetFraction = fraction.coerceIn(0f, 1f)
+                                        val target = (fraction * duration).toLong()
+                                        currentPos = target
+                                        exoPlayer.seekTo(target)
+                                    }
+                                },
+                                onValueChangeFinished = {
+                                    scrubTargetFraction = null
+                                },
+                                interactionSource = scrubInteractionSource,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.Transparent,
+                                    activeTrackColor = Color.Transparent,
+                                    inactiveTrackColor = Color.Transparent
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                         Text(
                             text = formatDuration(duration),
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White
+                            color = Color.White.copy(alpha = 0.85f)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         IconButton(

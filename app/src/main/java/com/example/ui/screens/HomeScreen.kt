@@ -8,9 +8,16 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -30,9 +37,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -76,7 +87,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -109,13 +122,20 @@ import com.example.model.UserPreferences
 import com.example.model.UserProfile
 import com.example.model.WatchHistoryEntry
 import com.example.notifications.PremiereAlertScheduler
+import com.example.ui.components.AnimatedProviderSwitcher
 import com.example.ui.components.AnimePosterCard
+import com.example.ui.components.CoverPalette
 import com.example.ui.components.ErrorStateView
 import com.example.ui.components.HomeLoadingSkeleton
 import com.example.ui.components.LatestEpisodeCard
 import com.example.ui.components.ProfileSwitcherDialog
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.StaggeredReveal
+import com.example.ui.components.kitsuneSharedPoster
+import com.example.ui.components.posterSharedKey
 import com.example.ui.components.profileAvatarDrawable
+import com.example.ui.components.rememberCoverPalette
+import com.example.ui.components.rememberPulseGlowFraction
 import com.example.ui.components.tvFocusHighlight
 import com.example.ui.viewmodel.HomeUiState
 import com.example.ui.viewmodel.HomeViewModel
@@ -194,22 +214,120 @@ fun HomeScreen(
         )
     }
 
-    Column(
+    val listState = rememberLazyListState()
+    var activeHeroCoverUrl by remember { mutableStateOf<String?>(null) }
+    val heroPalette = rememberCoverPalette(
+        imageUrl = activeHeroCoverUrl,
+        fallbackAccent = if (selectedProvider == AnimeProvider.LATANIME) {
+            MaterialTheme.colorScheme.secondary
+        } else {
+            MaterialTheme.colorScheme.primary
+        }
+    )
+    val isHeaderScrolled by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 20
+        }
+    }
+    val topBarContainerColor by animateColorAsState(
+        targetValue = if (isHeaderScrolled) {
+            MaterialTheme.colorScheme.background.copy(alpha = 0.92f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(240),
+        label = "home_topbar_bg"
+    )
+
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Column(
+        // Subtle atmospheric dynamic glow behind the top area
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(260.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                            heroPalette.ambientGlow,
                             MaterialTheme.colorScheme.background
                         )
                     )
                 )
+        )
+
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { viewModel.loadHome(isRefresh = true, provider = selectedProvider) },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            AnimatedContent(
+                targetState = selectedProvider,
+                transitionSpec = {
+                    val forward = targetState.ordinal > initialState.ordinal
+                    (slideInHorizontally(tween(240)) { if (forward) it / 8 else -it / 8 } + fadeIn(tween(220))) togetherWith
+                        (slideOutHorizontally(tween(180)) { if (forward) -it / 10 else it / 10 } + fadeOut(tween(180)))
+                },
+                label = "home_provider_transition",
+                modifier = Modifier.fillMaxSize()
+            ) { _ ->
+                when (val state = uiState) {
+                    is HomeUiState.Loading -> HomeLoadingSkeleton(
+                        modifier = Modifier.padding(top = 118.dp)
+                    )
+                    is HomeUiState.Error -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = 118.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            ErrorStateView(
+                                message = state.message,
+                                onRetry = { viewModel.loadHome(isRefresh = false, provider = selectedProvider) },
+                                onUnlockCloudflare = state.blockedUrl?.let { blocked ->
+                                    {
+                                        onUnlockCloudflare(blocked) {
+                                            viewModel.loadHome(isRefresh = false, provider = selectedProvider)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    is HomeUiState.Success -> {
+                        HomeFeedContent(
+                            feed = state.feed,
+                            listState = listState,
+                            heroPalette = heroPalette,
+                            onActiveHeroChanged = { cover -> activeHeroCoverUrl = cover },
+                            continueWatching = continueWatching,
+                            favorites = favorites,
+                            isTvMode = isTvMode,
+                            onOpenAnime = onOpenAnime,
+                            onPlayEpisode = onPlayEpisode,
+                            onOpenExplore = onOpenExplore,
+                            onSurpriseMe = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.pickRandomAnime()?.let { picked ->
+                                    onOpenAnime(picked.slug, picked.provider.id)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Translucent Sticky Top Bar
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(topBarContainerColor)
         ) {
             HomeTopHeader(
                 selectedProvider = selectedProvider,
@@ -222,54 +340,19 @@ fun HomeScreen(
                 onRefreshClick = { viewModel.loadHome(isRefresh = true, provider = selectedProvider) }
             )
 
-            ProviderSwitcherBar(
+            AnimatedProviderSwitcher(
                 selectedProvider = selectedProvider,
-                onSelectProvider = viewModel::selectProvider
+                onSelectProvider = viewModel::selectProvider,
+                tagPrefix = "provider_chip",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
-        }
 
-        PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = { viewModel.loadHome(isRefresh = true, provider = selectedProvider) },
-            modifier = Modifier.fillMaxSize()
-        ) {
-            when (val state = uiState) {
-                is HomeUiState.Loading -> HomeLoadingSkeleton()
-                is HomeUiState.Error -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        ErrorStateView(
-                            message = state.message,
-                            onRetry = { viewModel.loadHome(isRefresh = false, provider = selectedProvider) },
-                            onUnlockCloudflare = state.blockedUrl?.let { blocked ->
-                                {
-                                    onUnlockCloudflare(blocked) {
-                                        viewModel.loadHome(isRefresh = false, provider = selectedProvider)
-                                    }
-                                }
-                            }
-                        )
-                    }
-                }
-                is HomeUiState.Success -> {
-                    HomeFeedContent(
-                        feed = state.feed,
-                        continueWatching = continueWatching,
-                        favorites = favorites,
-                        isTvMode = isTvMode,
-                        onOpenAnime = onOpenAnime,
-                        onPlayEpisode = onPlayEpisode,
-                        onOpenExplore = onOpenExplore,
-                        onSurpriseMe = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.pickRandomAnime()?.let { picked ->
-                                onOpenAnime(picked.slug, picked.provider.id)
-                            }
-                        }
-                    )
-                }
+            Spacer(modifier = Modifier.height(4.dp))
+            AnimatedVisibility(visible = isHeaderScrolled) {
+                HorizontalDivider(
+                    color = heroPalette.vibrant.copy(alpha = 0.28f),
+                    thickness = 1.dp
+                )
             }
         }
     }
@@ -443,66 +526,11 @@ private fun HomeTopHeader(
 }
 
 @Composable
-private fun ProviderSwitcherBar(
-    selectedProvider: AnimeProvider,
-    onSelectProvider: (AnimeProvider) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        AnimeProvider.entries.forEach { provider ->
-            val selected = provider == selectedProvider
-            val isLatino = provider == AnimeProvider.LATANIME
-            FilterChip(
-                selected = selected,
-                onClick = { onSelectProvider(provider) },
-                leadingIcon = {
-                    Icon(
-                        imageVector = if (isLatino) Icons.Rounded.Translate else Icons.Rounded.Subtitles,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                },
-                label = {
-                    Text(
-                        text = "${provider.displayName} · ${provider.shortLabel}",
-                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = if (isLatino) {
-                        MaterialTheme.colorScheme.secondary
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                    selectedLabelColor = if (isLatino) {
-                        MaterialTheme.colorScheme.onSecondary
-                    } else {
-                        Color.White
-                    },
-                    selectedLeadingIconColor = if (isLatino) {
-                        MaterialTheme.colorScheme.onSecondary
-                    } else {
-                        Color.White
-                    }
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .height(40.dp)
-                    .testTag("provider_chip_${provider.id}")
-            )
-        }
-    }
-}
-
-@Composable
 private fun HomeFeedContent(
     feed: HomeFeed,
+    listState: LazyListState,
+    heroPalette: CoverPalette,
+    onActiveHeroChanged: (String?) -> Unit,
     continueWatching: List<WatchHistoryEntry>,
     favorites: List<FavoriteAnime>,
     isTvMode: Boolean,
@@ -514,16 +542,34 @@ private fun HomeFeedContent(
     val posterWidth = if (isTvMode) 166.dp else 142.dp
     val latestWidth = if (isTvMode) 216.dp else 188.dp
 
+    // Deduplicate sharedElement keys across sections so Compose SharedTransitionScope never sees duplicate keys
+    val featuredKeys = remember(feed.featured) {
+        feed.featured.map { posterSharedKey(it.provider.id, it.slug) }.toSet()
+    }
+    val favoriteKeys = remember(favorites, featuredKeys) {
+        favorites.take(12).map { posterSharedKey(it.providerId, it.animeSlug) }
+            .filterNot { it in featuredKeys }
+            .toSet()
+    }
+    val airingKeys = remember(feed.airing, featuredKeys, favoriteKeys) {
+        feed.airing.map { posterSharedKey(it.provider.id, it.slug) }
+            .filterNot { it in featuredKeys || it in favoriteKeys }
+            .toSet()
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(top = 122.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         if (feed.featured.isNotEmpty()) {
             item {
                 FeaturedHeroCarousel(
                     items = feed.featured,
+                    heroPalette = heroPalette,
                     isTvMode = isTvMode,
+                    onActiveHeroChanged = onActiveHeroChanged,
                     onOpenAnime = { slug, providerId -> onOpenAnime(slug, providerId) }
                 )
             }
@@ -540,8 +586,8 @@ private fun HomeFeedContent(
                     onClick = onSurpriseMe,
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                        contentColor = MaterialTheme.colorScheme.primary
+                        containerColor = heroPalette.vibrant.copy(alpha = 0.16f),
+                        contentColor = heroPalette.vibrant
                     ),
                     modifier = Modifier
                         .weight(1f)
@@ -596,24 +642,26 @@ private fun HomeFeedContent(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(
+                        itemsIndexed(
                             items = continueWatching.take(10),
-                            key = { "${it.providerId}_${it.animeSlug}_${it.episodeNumber}" }
-                        ) { entry ->
-                            ContinueWatchingCard(
-                                entry = entry,
-                                isTvMode = isTvMode,
-                                onClick = {
-                                    onPlayEpisode(
-                                        entry.animeSlug,
-                                        entry.episodeNumber,
-                                        entry.animeTitle,
-                                        entry.coverUrl,
-                                        entry.providerId,
-                                        entry.episodeUrl
-                                    )
-                                }
-                            )
+                            key = { _, entry -> "${entry.providerId}_${entry.animeSlug}_${entry.episodeNumber}" }
+                        ) { index, entry ->
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                ContinueWatchingCard(
+                                    entry = entry,
+                                    isTvMode = isTvMode,
+                                    onClick = {
+                                        onPlayEpisode(
+                                            entry.animeSlug,
+                                            entry.episodeNumber,
+                                            entry.animeTitle,
+                                            entry.coverUrl,
+                                            entry.providerId,
+                                            entry.episodeUrl
+                                        )
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -631,19 +679,23 @@ private fun HomeFeedContent(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(
+                        itemsIndexed(
                             items = favorites.take(12),
-                            key = { "fav_${it.profileId}_${it.providerId}_${it.animeSlug}" }
-                        ) { fav ->
-                            AnimePosterCard(
-                                title = fav.animeTitle,
-                                coverUrl = fav.coverUrl,
-                                badge = fav.type.ifBlank { AnimeProvider.fromId(fav.providerId).badgeText },
-                                subtitle = fav.status.ifBlank { fav.totalEpisodesText },
-                                onClick = { onOpenAnime(fav.animeSlug, fav.providerId) },
-                                modifier = Modifier.width(posterWidth),
-                                testTag = "home_fav_card_${fav.animeSlug}"
-                            )
+                            key = { _, fav -> "fav_${fav.profileId}_${fav.providerId}_${fav.animeSlug}" }
+                        ) { index, fav ->
+                            val sharedKey = posterSharedKey(fav.providerId, fav.animeSlug)
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = fav.animeTitle,
+                                    coverUrl = fav.coverUrl,
+                                    badge = fav.type.ifBlank { AnimeProvider.fromId(fav.providerId).badgeText },
+                                    subtitle = fav.status.ifBlank { fav.totalEpisodesText },
+                                    sharedElementKey = if (sharedKey in favoriteKeys) sharedKey else null,
+                                    onClick = { onOpenAnime(fav.animeSlug, fav.providerId) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "home_fav_card_${fav.animeSlug}"
+                                )
+                            }
                         }
                     }
                 }
@@ -661,28 +713,30 @@ private fun HomeFeedContent(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(
+                        itemsIndexed(
                             items = feed.latestEpisodes,
-                            key = { "${it.provider.id}_${it.animeSlug}_${it.episodeNumber}" }
-                        ) { ep ->
-                            LatestEpisodeCard(
-                                animeTitle = ep.animeTitle,
-                                episodeLabel = ep.episodeLabel,
-                                coverUrl = ep.coverUrl,
-                                onPlayClick = {
-                                    onPlayEpisode(
-                                        ep.animeSlug,
-                                        ep.episodeNumber,
-                                        ep.animeTitle,
-                                        ep.coverUrl,
-                                        ep.provider.id,
-                                        ep.episodeUrl
-                                    )
-                                },
-                                onDetailClick = { onOpenAnime(ep.animeSlug, ep.provider.id) },
-                                modifier = Modifier.width(latestWidth),
-                                testTag = "latest_ep_${ep.animeSlug}_${ep.episodeNumber}"
-                            )
+                            key = { _, ep -> "${ep.provider.id}_${ep.animeSlug}_${ep.episodeNumber}" }
+                        ) { index, ep ->
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                LatestEpisodeCard(
+                                    animeTitle = ep.animeTitle,
+                                    episodeLabel = ep.episodeLabel,
+                                    coverUrl = ep.coverUrl,
+                                    onPlayClick = {
+                                        onPlayEpisode(
+                                            ep.animeSlug,
+                                            ep.episodeNumber,
+                                            ep.animeTitle,
+                                            ep.coverUrl,
+                                            ep.provider.id,
+                                            ep.episodeUrl
+                                        )
+                                    },
+                                    onDetailClick = { onOpenAnime(ep.animeSlug, ep.provider.id) },
+                                    modifier = Modifier.width(latestWidth),
+                                    testTag = "latest_ep_${ep.animeSlug}_${ep.episodeNumber}"
+                                )
+                            }
                         }
                     }
                 }
@@ -702,16 +756,23 @@ private fun HomeFeedContent(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(feed.airing, key = { "air_${it.provider.id}_${it.slug}" }) { anime ->
-                            AnimePosterCard(
-                                title = anime.title,
-                                coverUrl = anime.coverUrl,
-                                badge = anime.type.ifBlank { "Emisión" },
-                                subtitle = anime.episodeBadge,
-                                onClick = { onOpenAnime(anime.slug, anime.provider.id) },
-                                modifier = Modifier.width(posterWidth),
-                                testTag = "airing_card_${anime.slug}"
-                            )
+                        itemsIndexed(
+                            items = feed.airing,
+                            key = { _, anime -> "air_${anime.provider.id}_${anime.slug}" }
+                        ) { index, anime ->
+                            val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = anime.title,
+                                    coverUrl = anime.coverUrl,
+                                    badge = anime.type.ifBlank { "Emisión" },
+                                    subtitle = anime.episodeBadge,
+                                    sharedElementKey = if (sharedKey in airingKeys) sharedKey else null,
+                                    onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "airing_card_${anime.slug}"
+                                )
+                            }
                         }
                     }
                 }
@@ -731,16 +792,30 @@ private fun HomeFeedContent(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(feed.recentAdded, key = { "rec_${it.provider.id}_${it.slug}" }) { anime ->
-                            AnimePosterCard(
-                                title = anime.title,
-                                coverUrl = anime.coverUrl,
-                                badge = anime.episodeBadge.ifBlank { anime.type },
-                                subtitle = if (anime.episodeBadge.isNotBlank()) anime.type else anime.provider.badgeText,
-                                onClick = { onOpenAnime(anime.slug, anime.provider.id) },
-                                modifier = Modifier.width(posterWidth),
-                                testTag = "recent_card_${anime.slug}"
-                            )
+                        itemsIndexed(
+                            items = feed.recentAdded,
+                            key = { _, anime -> "rec_${anime.provider.id}_${anime.slug}" }
+                        ) { index, anime ->
+                            val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
+                            val uniqueKey = if (
+                                sharedKey !in featuredKeys &&
+                                sharedKey !in favoriteKeys &&
+                                sharedKey !in airingKeys
+                            ) {
+                                sharedKey
+                            } else null
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = anime.title,
+                                    coverUrl = anime.coverUrl,
+                                    badge = anime.episodeBadge.ifBlank { anime.type },
+                                    subtitle = if (anime.episodeBadge.isNotBlank()) anime.type else anime.provider.badgeText,
+                                    sharedElementKey = uniqueKey,
+                                    onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "recent_card_${anime.slug}"
+                                )
+                            }
                         }
                     }
                 }
@@ -752,10 +827,17 @@ private fun HomeFeedContent(
 @Composable
 private fun FeaturedHeroCarousel(
     items: List<AnimeSummary>,
+    heroPalette: CoverPalette,
     isTvMode: Boolean,
+    onActiveHeroChanged: (String?) -> Unit,
     onOpenAnime: (slug: String, providerId: String) -> Unit
 ) {
     val pagerState = rememberPagerState(pageCount = { items.size })
+    val pulseAlpha = rememberPulseGlowFraction()
+
+    LaunchedEffect(pagerState.currentPage, items) {
+        onActiveHeroChanged(items.getOrNull(pagerState.currentPage)?.coverUrl)
+    }
 
     LaunchedEffect(items) {
         if (items.size <= 1) return@LaunchedEffect
@@ -781,11 +863,19 @@ private fun FeaturedHeroCarousel(
                 .coerceIn(0f, 1f)
             val cardScale = 1f - (0.06f * pageOffset)
             val cardAlpha = 1f - (0.24f * pageOffset)
+            val isFirstOccurrence = remember(items, page) {
+                items.indexOfFirst { it.provider.id == anime.provider.id && it.slug == anime.slug } == page
+            }
+            val sharedKey = if (isFirstOccurrence) {
+                posterSharedKey(anime.provider.id, anime.slug)
+            } else {
+                null
+            }
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (isTvMode) 304.dp else 268.dp)
+                    .height(if (isTvMode) 336.dp else 296.dp)
                     .tvFocusHighlight(shape = MaterialTheme.shapes.large)
                     .graphicsLayer {
                         scaleX = cardScale
@@ -794,10 +884,11 @@ private fun FeaturedHeroCarousel(
                     }
                     .clip(MaterialTheme.shapes.large)
                     .border(
-                        width = 1.dp,
+                        width = 1.5.dp,
                         brush = Brush.verticalGradient(
                             listOf(
-                                Color.White.copy(alpha = 0.22f),
+                                heroPalette.vibrant.copy(alpha = 0.72f),
+                                Color.White.copy(alpha = 0.14f),
                                 MaterialTheme.colorScheme.outlineVariant
                             )
                         ),
@@ -817,7 +908,9 @@ private fun FeaturedHeroCarousel(
                         model = anime.coverUrl,
                         contentDescription = stringResource(R.string.cd_poster, anime.title),
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .kitsuneSharedPoster(sharedKey)
                     )
                 }
 
@@ -827,13 +920,53 @@ private fun FeaturedHeroCarousel(
                         .background(
                             Brush.verticalGradient(
                                 colorStops = arrayOf(
-                                    0.0f to Color(0x280B0D14),
-                                    0.42f to Color(0x880B0D14),
-                                    1.0f to Color(0xF60B0D14)
+                                    0.0f to Color(0x360B0D14),
+                                    0.38f to Color(0x780B0D14),
+                                    0.72f to Color(0xDA0B0D14),
+                                    1.0f to Color(0xFA0B0D14)
                                 )
                             )
                         )
                 )
+
+                // Editorial Top Badges
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        color = heroPalette.vibrant.copy(alpha = 0.90f),
+                        shape = RoundedCornerShape(999.dp)
+                    ) {
+                        Text(
+                            text = "DESTACADO · ${anime.provider.shortLabel}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    if (items.size > 1) {
+                        Surface(
+                            color = Color(0x99090B12),
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f))
+                        ) {
+                            Text(
+                                text = "${page + 1} / ${items.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White.copy(alpha = 0.9f),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
 
                 Column(
                     modifier = Modifier
@@ -841,51 +974,78 @@ private fun FeaturedHeroCarousel(
                         .fillMaxWidth()
                         .padding(18.dp)
                 ) {
-                    if (anime.type.isNotBlank() || anime.episodeBadge.isNotBlank()) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.secondary,
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = anime.type.ifBlank { anime.episodeBadge },
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSecondary,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (anime.type.isNotBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondary,
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = anime.type,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSecondary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
                         }
+                        if (anime.episodeBadge.isNotBlank()) {
+                            Surface(
+                                color = Color.White.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = anime.episodeBadge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                    if (anime.type.isNotBlank() || anime.episodeBadge.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
                     Text(
                         text = anime.title,
                         style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.ExtraBold,
                         color = Color.White,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
 
                     if (anime.synopsisSnippet.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(5.dp))
                         Text(
                             text = anime.synopsisSnippet,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White.copy(alpha = 0.8f),
+                            color = Color.White.copy(alpha = 0.82f),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
                             onClick = { onOpenAnime(anime.slug, anime.provider.id) },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
+                                containerColor = heroPalette.vibrant
                             ),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
-                                .height(42.dp)
+                                .height(44.dp)
+                                .border(
+                                    width = 1.5.dp,
+                                    color = heroPalette.vibrant.copy(alpha = pulseAlpha),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
                                 .testTag("hero_watch_button")
                         ) {
                             Icon(
@@ -894,14 +1054,21 @@ private fun FeaturedHeroCarousel(
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = stringResource(R.string.hero_watch_now))
+                            Text(
+                                text = stringResource(R.string.hero_watch_now),
+                                fontWeight = FontWeight.Bold
+                            )
                         }
 
                         OutlinedButton(
                             onClick = { onOpenAnime(anime.slug, anime.provider.id) },
                             shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            modifier = Modifier.height(42.dp)
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = Color(0x66090B12),
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.height(44.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Info,
@@ -918,26 +1085,34 @@ private fun FeaturedHeroCarousel(
 
         if (items.size > 1) {
             Spacer(modifier = Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                repeat(items.size) { index ->
-                    val selected = pagerState.currentPage == index
-                    val dotWidth by animateDpAsState(
-                        targetValue = if (selected) 22.dp else 7.dp,
-                        animationSpec = tween(250),
-                        label = "hero_dot_width"
-                    )
-                    val dotColor by animateColorAsState(
-                        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                        animationSpec = tween(250),
-                        label = "hero_dot_color"
-                    )
-                    Box(
-                        modifier = Modifier
-                            .height(6.dp)
-                            .width(dotWidth)
-                            .clip(CircleShape)
-                            .background(dotColor)
-                    )
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                shape = CircleShape
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    repeat(items.size) { index ->
+                        val selected = pagerState.currentPage == index
+                        val dotWidth by animateDpAsState(
+                            targetValue = if (selected) 22.dp else 7.dp,
+                            animationSpec = tween(250),
+                            label = "hero_dot_width"
+                        )
+                        val dotColor by animateColorAsState(
+                            targetValue = if (selected) heroPalette.vibrant else MaterialTheme.colorScheme.outline,
+                            animationSpec = tween(250),
+                            label = "hero_dot_color"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .height(6.dp)
+                                .width(dotWidth)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                    }
                 }
             }
         }

@@ -1,8 +1,14 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -39,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,10 +59,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.model.AnimeProvider
+import com.example.ui.components.AnimatedProviderSwitcher
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.ErrorStateView
 import com.example.ui.components.ExploreLoadingSkeleton
+import com.example.ui.components.StaggeredReveal
+import com.example.ui.components.posterSharedKey
 import com.example.ui.viewmodel.ScheduleUiState
 import com.example.ui.viewmodel.ScheduleViewModel
 
@@ -133,61 +144,13 @@ fun ScheduleScreen(
                 }
             }
 
-            // Provider Switcher
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                AnimeProvider.entries.forEach { provider ->
-                    val selected = provider == selectedProvider
-                    val isLatino = provider == AnimeProvider.LATANIME
-                    FilterChip(
-                        selected = selected,
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            viewModel.selectProvider(provider)
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = if (isLatino) Icons.Rounded.Translate else Icons.Rounded.Subtitles,
-                                contentDescription = null,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = "${provider.displayName} · ${provider.shortLabel}",
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = if (isLatino) {
-                                MaterialTheme.colorScheme.secondary
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            },
-                            selectedLabelColor = if (isLatino) {
-                                MaterialTheme.colorScheme.onSecondary
-                            } else {
-                                Color.White
-                            },
-                            selectedLeadingIconColor = if (isLatino) {
-                                MaterialTheme.colorScheme.onSecondary
-                            } else {
-                                Color.White
-                            }
-                        ),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
-                            .testTag("schedule_provider_${provider.id}")
-                    )
-                }
-            }
+            // Animated Provider Switcher
+            AnimatedProviderSwitcher(
+                selectedProvider = selectedProvider,
+                onSelectProvider = viewModel::selectProvider,
+                tagPrefix = "schedule_provider",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
         }
 
         PullToRefreshBox(
@@ -195,106 +158,134 @@ fun ScheduleScreen(
             onRefresh = { viewModel.loadSchedule(isRefresh = true, provider = selectedProvider) },
             modifier = Modifier.fillMaxSize()
         ) {
-            when (val state = uiState) {
-                is ScheduleUiState.Loading -> {
-                    ExploreLoadingSkeleton()
-                }
-
-                is ScheduleUiState.Error -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        ErrorStateView(
-                            message = state.message,
-                            onRetry = { viewModel.loadSchedule(isRefresh = false, provider = selectedProvider) },
-                            onUnlockCloudflare = state.blockedUrl?.let { blocked ->
-                                {
-                                    onUnlockCloudflare(blocked) {
-                                        viewModel.loadSchedule(isRefresh = false, provider = selectedProvider)
-                                    }
-                                }
-                            }
-                        )
+            AnimatedContent(
+                targetState = selectedProvider,
+                transitionSpec = {
+                    val forward = targetState.ordinal > initialState.ordinal
+                    (slideInHorizontally(tween(240)) { if (forward) it / 8 else -it / 8 } + fadeIn(tween(220))) togetherWith
+                        (slideOutHorizontally(tween(180)) { if (forward) -it / 10 else it / 10 } + fadeOut(tween(180)))
+                },
+                label = "schedule_provider_transition",
+                modifier = Modifier.fillMaxSize()
+            ) { _ ->
+                when (val state = uiState) {
+                    is ScheduleUiState.Loading -> {
+                        ExploreLoadingSkeleton()
                     }
-                }
 
-                is ScheduleUiState.Success -> {
-                    val days = state.schedule.days
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        if (days.isNotEmpty()) {
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                itemsIndexed(days) { index, day ->
-                                    val selected = index == selectedDayIndex
-                                    val label = if (day.items.isNotEmpty()) {
-                                        "${day.dayLabel} (${day.items.size})"
-                                    } else {
-                                        day.dayLabel
+                    is ScheduleUiState.Error -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            ErrorStateView(
+                                message = state.message,
+                                onRetry = { viewModel.loadSchedule(isRefresh = false, provider = selectedProvider) },
+                                onUnlockCloudflare = state.blockedUrl?.let { blocked ->
+                                    {
+                                        onUnlockCloudflare(blocked) {
+                                            viewModel.loadSchedule(isRefresh = false, provider = selectedProvider)
+                                        }
                                     }
-                                    FilterChip(
-                                        selected = selected,
-                                        onClick = {
-                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            viewModel.selectDay(index)
-                                        },
-                                        label = {
-                                            Text(
-                                                text = label,
-                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                        },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                            selectedLabelColor = Color.White
-                                        ),
-                                        modifier = Modifier.testTag("schedule_day_${day.dayKey}")
-                                    )
+                                }
+                            )
+                        }
+                    }
+
+                    is ScheduleUiState.Success -> {
+                        val days = state.schedule.days
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            if (days.isNotEmpty()) {
+                                LazyRow(
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    itemsIndexed(days) { index, day ->
+                                        val selected = index == selectedDayIndex
+                                        val chipScale by animateFloatAsState(
+                                            targetValue = if (selected) 1.05f else 1f,
+                                            animationSpec = spring(
+                                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                stiffness = Spring.StiffnessMedium
+                                            ),
+                                            label = "schedule_day_scale"
+                                        )
+                                        val label = if (day.items.isNotEmpty()) {
+                                            "${day.dayLabel} (${day.items.size})"
+                                        } else {
+                                            day.dayLabel
+                                        }
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = {
+                                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                viewModel.selectDay(index)
+                                            },
+                                            label = {
+                                                Text(
+                                                    text = label,
+                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                                selectedLabelColor = Color.White
+                                            ),
+                                            modifier = Modifier
+                                                .scale(chipScale)
+                                                .testTag("schedule_day_${day.dayKey}")
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        AnimatedContent(
-                            targetState = selectedDayIndex,
-                            transitionSpec = { fadeIn() togetherWith fadeOut() },
-                            label = "schedule_day_grid",
-                            modifier = Modifier.fillMaxSize()
-                        ) { dayIdx ->
-                            val activeDay = days.getOrNull(dayIdx)
-                            val items = activeDay?.items.orEmpty()
-                            if (items.isEmpty()) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    EmptyStateView(
-                                        title = stringResource(R.string.schedule_empty_title),
-                                        subtitle = stringResource(R.string.schedule_empty_subtitle)
-                                    )
-                                }
-                            } else {
-                                LazyVerticalGrid(
-                                    columns = GridCells.Adaptive(136.dp),
-                                    contentPadding = PaddingValues(16.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    items(
-                                        items = items,
-                                        key = { "${it.provider.id}_${activeDay?.dayKey}_${it.slug}" }
-                                    ) { item ->
-                                        AnimePosterCard(
-                                            title = item.title,
-                                            coverUrl = item.coverUrl,
-                                            badge = item.releaseTime.ifBlank { item.provider.badgeText },
-                                            subtitle = item.episodeLabel.ifBlank { activeDay?.dayLabel.orEmpty() },
-                                            onClick = { onOpenAnime(item.slug, item.provider.id) },
-                                            modifier = Modifier.animateItem(),
-                                            testTag = "schedule_card_${item.slug}"
+                            AnimatedContent(
+                                targetState = selectedDayIndex,
+                                transitionSpec = {
+                                    val forward = targetState > initialState
+                                    (slideInHorizontally(tween(240)) { if (forward) it / 8 else -it / 8 } + fadeIn(tween(200))) togetherWith
+                                        (slideOutHorizontally(tween(180)) { if (forward) -it / 10 else it / 10 } + fadeOut(tween(180)))
+                                },
+                                label = "schedule_day_grid",
+                                modifier = Modifier.fillMaxSize()
+                            ) { dayIdx ->
+                                val activeDay = days.getOrNull(dayIdx)
+                                val items = activeDay?.items.orEmpty()
+                                if (items.isEmpty()) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        EmptyStateView(
+                                            title = stringResource(R.string.schedule_empty_title),
+                                            subtitle = stringResource(R.string.schedule_empty_subtitle)
                                         )
+                                    }
+                                } else {
+                                    LazyVerticalGrid(
+                                        columns = GridCells.Adaptive(136.dp),
+                                        contentPadding = PaddingValues(16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                                        modifier = Modifier.fillMaxSize()
+                                    ) {
+                                        itemsIndexed(
+                                            items = items,
+                                            key = { _, item -> "${item.provider.id}_${activeDay?.dayKey}_${item.slug}" }
+                                        ) { index, item ->
+                                            StaggeredReveal(index = index, maxStaggerItems = 8) {
+                                                AnimePosterCard(
+                                                    title = item.title,
+                                                    coverUrl = item.coverUrl,
+                                                    badge = item.releaseTime.ifBlank { item.provider.badgeText },
+                                                    subtitle = item.episodeLabel.ifBlank { activeDay?.dayLabel.orEmpty() },
+                                                    sharedElementKey = posterSharedKey(item.provider.id, item.slug),
+                                                    onClick = { onOpenAnime(item.slug, item.provider.id) },
+                                                    modifier = Modifier.animateItem(),
+                                                    testTag = "schedule_card_${item.slug}"
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }

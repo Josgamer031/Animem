@@ -1,8 +1,11 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -25,7 +28,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -80,6 +85,10 @@ import com.example.model.WatchStatus
 import com.example.model.formatWatchDuration
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.EmptyStateView
+import com.example.ui.components.SlidingPillTabBar
+import com.example.ui.components.SlidingTabItem
+import com.example.ui.components.StaggeredReveal
+import com.example.ui.components.posterSharedKey
 import com.example.ui.components.profileAvatarDrawable
 import com.example.ui.components.tvFocusHighlight
 import com.example.ui.viewmodel.HistoryViewModel
@@ -172,108 +181,42 @@ fun HistoryScreen(
                 }
             }
 
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    FilterChip(
-                        selected = selectedTab == 0,
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            selectedTab = 0
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.History,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = "Historial (${entries.size})",
-                                fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = Color.White,
-                            selectedLeadingIconColor = Color.White
-                        ),
-                        modifier = Modifier
-                            .height(42.dp)
-                            .testTag("library_tab_history")
+            SlidingPillTabBar(
+                tabs = listOf(
+                    SlidingTabItem(
+                        label = "Historial (${entries.size})",
+                        icon = Icons.Rounded.History,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        selectedContentColor = Color.White,
+                        testTag = "library_tab_history"
+                    ),
+                    SlidingTabItem(
+                        label = "Mi Lista (${favorites.size})",
+                        icon = Icons.Rounded.Favorite,
+                        accentColor = MaterialTheme.colorScheme.secondary,
+                        selectedContentColor = MaterialTheme.colorScheme.onSecondary,
+                        testTag = "library_tab_mylist"
+                    ),
+                    SlidingTabItem(
+                        label = stringResource(R.string.library_tab_stats),
+                        icon = Icons.Rounded.BarChart,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        selectedContentColor = Color.White,
+                        testTag = "library_tab_stats"
                     )
-                }
-
-                item {
-                    FilterChip(
-                        selected = selectedTab == 1,
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            selectedTab = 1
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.Favorite,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = "Mi Lista (${favorites.size})",
-                                fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                            selectedLabelColor = MaterialTheme.colorScheme.onSecondary,
-                            selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondary
-                        ),
-                        modifier = Modifier
-                            .height(42.dp)
-                            .testTag("library_tab_mylist")
-                    )
-                }
-
-                item {
-                    FilterChip(
-                        selected = selectedTab == 2,
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            selectedTab = 2
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.BarChart,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                text = stringResource(R.string.library_tab_stats),
-                                fontWeight = if (selectedTab == 2) FontWeight.Bold else FontWeight.Medium
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                            selectedLabelColor = Color.White,
-                            selectedLeadingIconColor = Color.White
-                        ),
-                        modifier = Modifier
-                            .height(42.dp)
-                            .testTag("library_tab_stats")
-                    )
-                }
-            }
+                ),
+                selectedIndex = selectedTab,
+                onSelectTab = { selectedTab = it }
+            )
         }
 
         AnimatedContent(
             targetState = selectedTab,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            transitionSpec = {
+                val forward = targetState > initialState
+                (slideInHorizontally(tween(240)) { if (forward) it / 8 else -it / 8 } + fadeIn(tween(220))) togetherWith
+                    (slideOutHorizontally(tween(180)) { if (forward) -it / 10 else it / 10 } + fadeOut(tween(180)))
+            },
             label = "library_tab_content",
             modifier = Modifier.fillMaxSize()
         ) { tab ->
@@ -295,29 +238,31 @@ fun HistoryScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(
+                            itemsIndexed(
                                 items = entries,
-                                key = { "${it.profileId}_${it.providerId}_${it.animeSlug}_${it.episodeNumber}" }
-                            ) { entry ->
-                                HistoryEntryCard(
-                                    entry = entry,
-                                    onPlay = {
-                                        onPlayEpisode(
-                                            entry.animeSlug,
-                                            entry.episodeNumber,
-                                            entry.animeTitle,
-                                            entry.coverUrl,
-                                            entry.providerId,
-                                            entry.episodeUrl
-                                        )
-                                    },
-                                    onOpenDetail = { onOpenAnime(entry.animeSlug, entry.providerId) },
-                                    onDelete = {
-                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        viewModel.removeEntry(entry.animeSlug, entry.episodeNumber, entry.providerId)
-                                    },
-                                    modifier = Modifier.animateItem()
-                                )
+                                key = { _, it -> "${it.profileId}_${it.providerId}_${it.animeSlug}_${it.episodeNumber}" }
+                            ) { index, entry ->
+                                StaggeredReveal(index = index, maxStaggerItems = 7) {
+                                    HistoryEntryCard(
+                                        entry = entry,
+                                        onPlay = {
+                                            onPlayEpisode(
+                                                entry.animeSlug,
+                                                entry.episodeNumber,
+                                                entry.animeTitle,
+                                                entry.coverUrl,
+                                                entry.providerId,
+                                                entry.episodeUrl
+                                            )
+                                        },
+                                        onOpenDetail = { onOpenAnime(entry.animeSlug, entry.providerId) },
+                                        onDelete = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.removeEntry(entry.animeSlug, entry.episodeNumber, entry.providerId)
+                                        },
+                                        modifier = Modifier.animateItem()
+                                    )
+                                }
                             }
                         }
                     }
@@ -381,23 +326,25 @@ fun HistoryScreen(
                                 verticalArrangement = Arrangement.spacedBy(14.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(
+                                itemsIndexed(
                                     items = filteredFavorites,
-                                    key = { "${it.profileId}_${it.providerId}_${it.animeSlug}" }
-                                ) { fav ->
-                                    FavoriteGridItem(
-                                        favorite = fav,
-                                        onClick = { onOpenAnime(fav.animeSlug, fav.providerId) },
-                                        onChangeStatus = { newStatus ->
-                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            viewModel.updateFavoriteStatus(fav.animeSlug, fav.providerId, newStatus)
-                                        },
-                                        onRemove = {
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.removeFavorite(fav.animeSlug, fav.providerId)
-                                        },
-                                        modifier = Modifier.animateItem()
-                                    )
+                                    key = { _, it -> "${it.profileId}_${it.providerId}_${it.animeSlug}" }
+                                ) { index, fav ->
+                                    StaggeredReveal(index = index, maxStaggerItems = 8) {
+                                        FavoriteGridItem(
+                                            favorite = fav,
+                                            onClick = { onOpenAnime(fav.animeSlug, fav.providerId) },
+                                            onChangeStatus = { newStatus ->
+                                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                viewModel.updateFavoriteStatus(fav.animeSlug, fav.providerId, newStatus)
+                                            },
+                                            onRemove = {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                viewModel.removeFavorite(fav.animeSlug, fav.providerId)
+                                            },
+                                            modifier = Modifier.animateItem()
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -631,6 +578,7 @@ private fun FavoriteGridItem(
             coverUrl = favorite.coverUrl,
             badge = provider.badgeText,
             subtitle = favorite.watchStatus.label,
+            sharedElementKey = posterSharedKey(favorite.providerId, favorite.animeSlug),
             onClick = onClick,
             testTag = "favorite_card_${favorite.animeSlug}"
         )

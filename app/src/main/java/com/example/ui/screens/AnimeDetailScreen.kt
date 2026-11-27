@@ -2,10 +2,17 @@ package com.example.ui.screens
 
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -30,27 +37,34 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -63,17 +77,22 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -83,6 +102,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -94,10 +114,17 @@ import com.example.model.EpisodeItem
 import com.example.model.WatchHistoryEntry
 import com.example.model.WatchStatus
 import com.example.ui.components.AnimeDetailLoadingSkeleton
+import com.example.ui.components.CoverPalette
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.StaggeredReveal
+import com.example.ui.components.kitsuneSharedPoster
+import com.example.ui.components.posterSharedKey
+import com.example.ui.components.rememberCoverPalette
+import com.example.ui.components.rememberPulseGlowFraction
 import com.example.ui.components.tvFocusHighlight
 import com.example.ui.viewmodel.AnimeDetailUiState
 import com.example.ui.viewmodel.AnimeDetailViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun AnimeDetailScreen(
@@ -114,15 +141,61 @@ fun AnimeDetailScreen(
     val episodeQuery by viewModel.episodeQuery.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
+    val listState = rememberLazyListState()
+    val successDetail = (uiState as? AnimeDetailUiState.Success)?.detail
+    val coverPalette = rememberCoverPalette(
+        imageUrl = successDetail?.coverUrl,
+        fallbackAccent = MaterialTheme.colorScheme.primary
+    )
+
+    val topBarScrolled by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 150
+        }
+    }
+    val topBarBgColor by animateColorAsState(
+        targetValue = if (topBarScrolled) {
+            MaterialTheme.colorScheme.background.copy(alpha = 0.92f)
+        } else {
+            Color.Transparent
+        },
+        animationSpec = tween(240),
+        label = "detail_topbar_bg"
+    )
+    val topBarButtonBg by animateColorAsState(
+        targetValue = if (topBarScrolled) {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)
+        } else {
+            Color(0xAA0B0D14)
+        },
+        animationSpec = tween(240),
+        label = "detail_topbar_btn_bg"
+    )
 
     val favoriteScale by animateFloatAsState(
-        targetValue = if (isFavorite) 1.15f else 1f,
+        targetValue = if (isFavorite) 1.18f else 1f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium
         ),
         label = "favorite_scale"
     )
+    val heartBurstScale = remember { Animatable(0.8f) }
+    val heartBurstAlpha = remember { Animatable(0f) }
+    var prevFav by remember { mutableStateOf(isFavorite) }
+    LaunchedEffect(isFavorite) {
+        if (isFavorite && !prevFav) {
+            heartBurstScale.snapTo(0.8f)
+            heartBurstAlpha.snapTo(0.85f)
+            launch {
+                heartBurstScale.animateTo(1.75f, tween(380))
+            }
+            launch {
+                heartBurstAlpha.animateTo(0f, tween(380))
+            }
+        }
+        prevFav = isFavorite
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -155,6 +228,8 @@ fun AnimeDetailScreen(
                 is AnimeDetailUiState.Success -> {
                     AnimeDetailContent(
                         detail = state.detail,
+                        coverPalette = coverPalette,
+                        listState = listState,
                         episodes = state.displayedEpisodes,
                         episodeQuery = episodeQuery,
                         selectedPage = state.selectedPage,
@@ -196,85 +271,131 @@ fun AnimeDetailScreen(
                 }
             }
 
-            // Floating Top Bar: Back + Favorite + Share
-            Row(
+            // Translucent Sticky Top Bar: Back + Scrolled Title + Favorite + Share
+            Column(
                 modifier = Modifier
+                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .background(topBarBgColor)
             ) {
-                Surface(
-                    color = Color(0xAA0B0D14),
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("detail_back_button")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.cd_back),
-                            tint = Color.White
-                        )
-                    }
-                }
-
-                val successDetail = (uiState as? AnimeDetailUiState.Success)?.detail
-                if (successDetail != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Surface(
-                            color = Color(0xAA0B0D14),
+                            color = topBarButtonBg,
                             shape = CircleShape,
                             modifier = Modifier.size(48.dp)
                         ) {
                             IconButton(
-                                onClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.toggleFavorite()
-                                },
-                                modifier = Modifier.testTag("detail_favorite_button")
+                                onClick = onBack,
+                                modifier = Modifier.testTag("detail_back_button")
                             ) {
                                 Icon(
-                                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                    contentDescription = stringResource(R.string.cd_favorite),
-                                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else Color.White,
-                                    modifier = Modifier.scale(favoriteScale)
-                                )
-                            }
-                        }
-
-                        Surface(
-                            color = Color(0xAA0B0D14),
-                            shape = CircleShape,
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    val shareUrl = "${successDetail.provider.baseUrl}/${successDetail.slug}/"
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(
-                                            Intent.EXTRA_TEXT,
-                                            "Mira ${successDetail.title} en ${successDetail.provider.displayName}: $shareUrl"
-                                        )
-                                    }
-                                    context.startActivity(
-                                        Intent.createChooser(intent, "Compartir anime")
-                                    )
-                                },
-                                modifier = Modifier.testTag("detail_share_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Share,
-                                    contentDescription = stringResource(R.string.cd_share),
+                                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                    contentDescription = stringResource(R.string.cd_back),
                                     tint = Color.White
                                 )
                             }
                         }
+
+                        AnimatedVisibility(
+                            visible = topBarScrolled && successDetail != null,
+                            enter = fadeIn(tween(200)) + slideInVertically { it / 3 },
+                            exit = fadeOut(tween(160)) + slideOutVertically { it / 3 },
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 10.dp)
+                        ) {
+                            Text(
+                                text = successDetail?.title.orEmpty(),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
+
+                    if (successDetail != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(contentAlignment = Alignment.Center) {
+                                if (heartBurstAlpha.value > 0.01f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .scale(heartBurstScale.value)
+                                            .alpha(heartBurstAlpha.value)
+                                            .border(2.dp, coverPalette.vibrant, CircleShape)
+                                    )
+                                }
+                                Surface(
+                                    color = topBarButtonBg,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.toggleFavorite()
+                                        },
+                                        modifier = Modifier.testTag("detail_favorite_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                            contentDescription = stringResource(R.string.cd_favorite),
+                                            tint = if (isFavorite) coverPalette.vibrant else Color.White,
+                                            modifier = Modifier.scale(favoriteScale)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                color = topBarButtonBg,
+                                shape = CircleShape,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        val shareUrl = "${successDetail.provider.baseUrl}/${successDetail.slug}/"
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(
+                                                Intent.EXTRA_TEXT,
+                                                "Mira ${successDetail.title} en ${successDetail.provider.displayName}: $shareUrl"
+                                            )
+                                        }
+                                        context.startActivity(
+                                            Intent.createChooser(intent, "Compartir anime")
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("detail_share_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Share,
+                                        contentDescription = stringResource(R.string.cd_share),
+                                        tint = Color.White
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                AnimatedVisibility(visible = topBarScrolled) {
+                    HorizontalDivider(
+                        color = coverPalette.vibrant.copy(alpha = 0.28f),
+                        thickness = 1.dp
+                    )
                 }
             }
         }
@@ -285,6 +406,8 @@ fun AnimeDetailScreen(
 @Composable
 private fun AnimeDetailContent(
     detail: AnimeDetail,
+    coverPalette: CoverPalette,
+    listState: LazyListState,
     episodes: List<EpisodeItem>,
     episodeQuery: String,
     selectedPage: Int,
@@ -304,6 +427,18 @@ private fun AnimeDetailContent(
     onPlayEpisode: (Int) -> Unit
 ) {
     var synopsisExpanded by remember { mutableStateOf(false) }
+    var isGridView by rememberSaveable { mutableStateOf(false) }
+    val pulseFraction = rememberPulseGlowFraction()
+
+    val headerScrollOffset by remember {
+        derivedStateOf {
+            if (listState.firstVisibleItemIndex == 0) {
+                listState.firstVisibleItemScrollOffset.toFloat()
+            } else {
+                900f
+            }
+        }
+    }
 
     val latestWatched = watchedMap.values.maxByOrNull { it.updatedAtMillis }
     val primaryEpisode = latestWatched?.episodeNumber
@@ -323,44 +458,59 @@ private fun AnimeDetailContent(
         detail.status.contains("upcoming", ignoreCase = true)
 
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             .navigationBarsPadding(),
         contentPadding = PaddingValues(bottom = 28.dp)
     ) {
-        // Backdrop & Poster Header
+        // Parallax Backdrop & Adaptive Palette Poster Header
         item {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(330.dp)
+                    .height(340.dp)
+                    .clipToBounds()
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_cinema_backdrop_1795549224193),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .alpha(0.38f)
-                )
-                if (detail.coverUrl.isNotBlank()) {
-                    AsyncImage(
-                        model = detail.coverUrl,
+                        .graphicsLayer {
+                            translationY = headerScrollOffset * 0.45f
+                            val scale = 1f + (headerScrollOffset / 1900f).coerceIn(0f, 0.14f)
+                            scaleX = scale
+                            scaleY = scale
+                            alpha = (1f - (headerScrollOffset / 560f)).coerceIn(0.15f, 1f)
+                        }
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.img_cinema_backdrop_1795549224193),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
                             .alpha(0.38f)
                     )
+                    if (detail.coverUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = detail.coverUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(0.42f)
+                        )
+                    }
                 }
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             Brush.verticalGradient(
                                 listOf(
-                                    Color(0x660B0D14),
-                                    Color(0xCC0B0D14),
+                                    coverPalette.ambientGlow,
+                                    Color(0xB80B0D14),
                                     MaterialTheme.colorScheme.background
                                 )
                             )
@@ -376,13 +526,19 @@ private fun AnimeDetailContent(
                 ) {
                     Surface(
                         shape = MaterialTheme.shapes.medium,
-                        tonalElevation = 6.dp,
+                        tonalElevation = 8.dp,
                         modifier = Modifier
                             .width(122.dp)
-                            .aspectRatio(0.7f)
+                            .aspectRatio(0.70f)
+                            .kitsuneSharedPoster(posterSharedKey(detail.provider.id, detail.slug))
                             .border(
-                                1.dp,
-                                Color.White.copy(alpha = 0.14f),
+                                1.5.dp,
+                                Brush.verticalGradient(
+                                    listOf(
+                                        coverPalette.vibrant.copy(alpha = 0.85f),
+                                        Color.White.copy(alpha = 0.18f)
+                                    )
+                                ),
                                 MaterialTheme.shapes.medium
                             )
                     ) {
@@ -474,11 +630,16 @@ private fun AnimeDetailContent(
                         onClick = { onPlayEpisode(primaryEpisode) },
                         shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
+                            containerColor = coverPalette.vibrant
                         ),
                         modifier = Modifier
                             .weight(1f)
                             .height(50.dp)
+                            .border(
+                                width = 1.5.dp,
+                                color = coverPalette.vibrant.copy(alpha = pulseFraction),
+                                shape = RoundedCornerShape(14.dp)
+                            )
                             .testTag("detail_primary_watch_button")
                     ) {
                         Icon(
@@ -498,21 +659,29 @@ private fun AnimeDetailContent(
                         )
                     }
 
+                    val myListContainer by animateColorAsState(
+                        targetValue = if (isFavorite) {
+                            coverPalette.vibrant.copy(alpha = 0.16f)
+                        } else {
+                            Color.Transparent
+                        },
+                        animationSpec = tween(240),
+                        label = "mylist_btn_container"
+                    )
+                    val myListBorder by animateColorAsState(
+                        targetValue = if (isFavorite) coverPalette.vibrant else MaterialTheme.colorScheme.outline,
+                        animationSpec = tween(240),
+                        label = "mylist_btn_border"
+                    )
+
                     OutlinedButton(
                         onClick = onToggleFavorite,
                         shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                        ),
+                        border = BorderStroke(1.dp, myListBorder),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = if (isFavorite) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                            } else {
-                                Color.Transparent
-                            },
+                            containerColor = myListContainer,
                             contentColor = if (isFavorite) {
-                                MaterialTheme.colorScheme.primary
+                                coverPalette.vibrant
                             } else {
                                 MaterialTheme.colorScheme.onBackground
                             }
@@ -538,8 +707,12 @@ private fun AnimeDetailContent(
                     }
                 }
 
-                // Tracking Status Selector when saved in Mi Lista
-                AnimatedVisibility(visible = isFavorite) {
+                // Animated Tracking Status Selector when saved in Mi Lista
+                AnimatedVisibility(
+                    visible = isFavorite,
+                    enter = fadeIn(tween(220)) + slideInVertically { -it / 4 },
+                    exit = fadeOut(tween(180))
+                ) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = stringResource(R.string.watch_status_label),
@@ -552,9 +725,26 @@ private fun AnimeDetailContent(
                         ) {
                             items(WatchStatus.entries) { status ->
                                 val selected = favoriteStatus == status
+                                val chipScale by animateFloatAsState(
+                                    targetValue = if (selected) 1.04f else 1f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                                        stiffness = Spring.StiffnessMedium
+                                    ),
+                                    label = "watch_status_scale"
+                                )
                                 FilterChip(
                                     selected = selected,
                                     onClick = { onSelectWatchStatus(status) },
+                                    leadingIcon = if (selected) {
+                                        {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else null,
                                     label = {
                                         Text(
                                             text = status.label,
@@ -563,9 +753,12 @@ private fun AnimeDetailContent(
                                     },
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary,
+                                        selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondary
                                     ),
-                                    modifier = Modifier.testTag("detail_watch_status_${status.name.lowercase()}")
+                                    modifier = Modifier
+                                        .scale(chipScale)
+                                        .testTag("detail_watch_status_${status.name.lowercase()}")
                                 )
                             }
                         }
@@ -657,17 +850,65 @@ private fun AnimeDetailContent(
                     }
                 }
 
-                TextButton(
-                    onClick = onToggleSort,
-                    modifier = Modifier.testTag("detail_sort_episodes")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.SwapVert,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(if (sortDescending) "Mayor a menor" else "Menor a mayor")
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(modifier = Modifier.padding(2.dp)) {
+                            IconButton(
+                                onClick = { isGridView = false },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (!isGridView) coverPalette.vibrant else Color.Transparent
+                                    )
+                                    .testTag("detail_episodes_list_mode")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ViewAgenda,
+                                    contentDescription = "Vista lista",
+                                    tint = if (!isGridView) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { isGridView = true },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isGridView) coverPalette.vibrant else Color.Transparent
+                                    )
+                                    .testTag("detail_episodes_grid_mode")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.GridView,
+                                    contentDescription = "Vista cuadrícula",
+                                    tint = if (isGridView) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onToggleSort,
+                        modifier = Modifier.testTag("detail_sort_episodes")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SwapVert,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (sortDescending) "Mayor a menor" else "Menor a mayor")
+                    }
                 }
             }
 
@@ -815,18 +1056,49 @@ private fun AnimeDetailContent(
                     }
                 }
             }
+        } else if (isGridView) {
+            val rows = filteredEpisodes.chunked(4)
+            itemsIndexed(rows, key = { _, row -> "grid_${row.first().number}" }) { rowIdx, rowEpisodes ->
+                StaggeredReveal(index = rowIdx, maxStaggerItems = 6) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        rowEpisodes.forEach { ep ->
+                            val watchedEntry = watchedMap[ep.number]
+                            EpisodeGridTile(
+                                episode = ep,
+                                watchedEntry = watchedEntry,
+                                isLatestWatched = latestWatched?.episodeNumber == ep.number,
+                                accentColor = coverPalette.vibrant,
+                                onClick = { onPlayEpisode(ep.number) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        repeat(4 - rowEpisodes.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
         } else {
-            items(filteredEpisodes, key = { it.number }) { ep ->
+            itemsIndexed(filteredEpisodes, key = { _, ep -> ep.number }) { index, ep ->
                 val watchedEntry = watchedMap[ep.number]
-                EpisodeRowItem(
-                    episode = ep,
-                    fallbackCover = detail.coverUrl,
-                    watchedEntry = watchedEntry,
-                    onClick = { onPlayEpisode(ep.number) },
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp, vertical = 5.dp)
-                        .animateItem()
-                )
+                StaggeredReveal(index = index, maxStaggerItems = 7) {
+                    EpisodeRowItem(
+                        episode = ep,
+                        fallbackCover = detail.coverUrl,
+                        watchedEntry = watchedEntry,
+                        isLatestWatched = latestWatched?.episodeNumber == ep.number,
+                        accentColor = coverPalette.vibrant,
+                        onClick = { onPlayEpisode(ep.number) },
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp, vertical = 5.dp)
+                            .animateItem()
+                    )
+                }
             }
         }
     }
@@ -852,10 +1124,101 @@ private fun StatusPill(
 }
 
 @Composable
+private fun EpisodeGridTile(
+    episode: EpisodeItem,
+    watchedEntry: WatchHistoryEntry?,
+    isLatestWatched: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isWatched = watchedEntry != null
+    val progress = if (watchedEntry != null && watchedEntry.durationMs > 0L) {
+        (watchedEntry.positionMs.toFloat() / watchedEntry.durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = when {
+            isLatestWatched -> accentColor.copy(alpha = 0.22f)
+            isWatched -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            else -> MaterialTheme.colorScheme.surface
+        },
+        border = BorderStroke(
+            width = if (isLatestWatched) 1.5.dp else 1.dp,
+            color = if (isLatestWatched) accentColor else MaterialTheme.colorScheme.outlineVariant
+        ),
+        modifier = modifier
+            .height(64.dp)
+            .tvFocusHighlight(shape = RoundedCornerShape(12.dp), focusedScale = 1.04f)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .testTag("episode_grid_item_${episode.number}")
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "Ep. ${episode.number}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        isLatestWatched -> accentColor
+                        isWatched -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+                if (isWatched) {
+                    Text(
+                        text = if (isLatestWatched) "Actual" else "Visto",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isLatestWatched) accentColor else MaterialTheme.colorScheme.secondary,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            if (isWatched) {
+                Icon(
+                    imageVector = Icons.Rounded.CheckCircle,
+                    contentDescription = "Visto",
+                    tint = if (isLatestWatched) accentColor else MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(13.dp)
+                )
+            }
+
+            if (progress > 0f) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    color = accentColor,
+                    trackColor = Color.White.copy(alpha = 0.16f),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun EpisodeRowItem(
     episode: EpisodeItem,
     fallbackCover: String,
     watchedEntry: WatchHistoryEntry?,
+    isLatestWatched: Boolean,
+    accentColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -867,10 +1230,18 @@ private fun EpisodeRowItem(
 
     Surface(
         shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surface,
+        color = if (isLatestWatched) {
+            accentColor.copy(alpha = 0.12f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = if (isLatestWatched) {
+            BorderStroke(1.dp, accentColor.copy(alpha = 0.7f))
+        } else null,
         tonalElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
+            .alpha(if (isWatched && !isLatestWatched) 0.78f else 1f)
             .tvFocusHighlight(shape = MaterialTheme.shapes.small, focusedScale = 1.02f)
             .clip(MaterialTheme.shapes.small)
             .clickable(onClick = onClick)
@@ -913,7 +1284,7 @@ private fun EpisodeRowItem(
                 if (progress > 0f) {
                     LinearProgressIndicator(
                         progress = { progress },
-                        color = MaterialTheme.colorScheme.primary,
+                        color = accentColor,
                         trackColor = Color.White.copy(alpha = 0.25f),
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -929,7 +1300,7 @@ private fun EpisodeRowItem(
                 Text(
                     text = "Episodio ${episode.number}",
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (isLatestWatched) accentColor else MaterialTheme.colorScheme.onSurface
                 )
                 if (episode.label.isNotBlank() && !episode.label.equals("Episodio ${episode.number}", true)) {
                     Text(
@@ -943,14 +1314,30 @@ private fun EpisodeRowItem(
             }
 
             if (isWatched) {
-                Icon(
-                    imageVector = Icons.Rounded.CheckCircle,
-                    contentDescription = "Visto",
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier
-                        .padding(end = 6.dp)
-                        .size(20.dp)
-                )
+                Surface(
+                    color = (if (isLatestWatched) accentColor else MaterialTheme.colorScheme.secondary).copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.padding(end = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.CheckCircle,
+                            contentDescription = "Visto",
+                            tint = if (isLatestWatched) accentColor else MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = if (isLatestWatched) "Actual" else "Visto",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isLatestWatched) accentColor else MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
             }
         }
     }
