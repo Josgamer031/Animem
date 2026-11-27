@@ -6,9 +6,12 @@ import com.example.data.CloudflareBlockedException
 import com.example.data.JkAnimeRepository
 import com.example.model.AnimeProvider
 import com.example.model.AnimeSummary
+import com.example.model.AppColorTheme
+import com.example.model.CloudSyncState
 import com.example.model.DeviceMode
 import com.example.model.FavoriteAnime
 import com.example.model.HomeFeed
+import com.example.model.HomeSupplementarySections
 import com.example.model.UserPreferences
 import com.example.model.UserProfile
 import com.example.model.WatchHistoryEntry
@@ -32,10 +35,14 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
     private val _uiState = MutableStateFlow<HomeUiState>(HomeUiState.Loading)
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    private val _supplementarySections = MutableStateFlow(HomeSupplementarySections())
+    val supplementarySections: StateFlow<HomeSupplementarySections> = _supplementarySections.asStateFlow()
+
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
     val selectedProvider: StateFlow<AnimeProvider> = repository.selectedProvider
+    val cloudSyncState: StateFlow<CloudSyncState> = repository.cloudSyncState
 
     val userPreferences: StateFlow<UserPreferences> =
         (repository.userPreferences ?: MutableStateFlow(UserPreferences()))
@@ -79,6 +86,7 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var loadJob: Job? = null
+    private var supplementaryJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -92,7 +100,20 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
     fun selectProvider(provider: AnimeProvider) {
         if (repository.selectedProvider.value == provider) return
         _uiState.value = HomeUiState.Loading
+        _supplementarySections.value = HomeSupplementarySections(provider = provider)
         repository.setSelectedProvider(provider)
+    }
+
+    fun openGenreInExplore(genreSlug: String) {
+        repository.requestExploreGenre(repository.selectedProvider.value, genreSlug)
+    }
+
+    fun openCategoryInExplore(status: String = "", type: String = "") {
+        repository.requestExploreCategory(
+            provider = repository.selectedProvider.value,
+            status = status,
+            type = type
+        )
     }
 
     fun setAutoPlayNext(enabled: Boolean) {
@@ -119,9 +140,35 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
         }
     }
 
+    fun setColorTheme(theme: AppColorTheme) {
+        viewModelScope.launch {
+            repository.setColorTheme(theme)
+        }
+    }
+
+    fun setAmoledBlack(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setAmoledBlack(enabled)
+        }
+    }
+
+    fun syncCloudNow() {
+        viewModelScope.launch {
+            repository.syncWithCloudNow()
+        }
+    }
+
     fun pickRandomAnime(): AnimeSummary? {
         val feed = (_uiState.value as? HomeUiState.Success)?.feed ?: return null
-        val pool = (feed.featured + feed.airing + feed.recentAdded).distinctBy { it.slug }
+        val supp = _supplementarySections.value.takeIf { it.provider == feed.provider }
+        val pool = (
+            feed.featured +
+                feed.airing +
+                feed.recentAdded +
+                supp?.movies.orEmpty() +
+                supp?.ovas.orEmpty() +
+                supp?.completed.orEmpty()
+            ).distinctBy { it.slug }
         if (pool.isNotEmpty()) return pool.random()
         val ep = feed.latestEpisodes.randomOrNull() ?: return null
         return AnimeSummary(
@@ -179,6 +226,7 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
                         )
                     } else {
                         _uiState.value = HomeUiState.Success(feed)
+                        loadSupplementarySections(provider)
                     }
                 }
                 .onFailure { error ->
@@ -195,6 +243,16 @@ class HomeViewModel(private val repository: JkAnimeRepository) : ViewModel() {
                     }
                 }
             _isRefreshing.value = false
+        }
+    }
+
+    private fun loadSupplementarySections(provider: AnimeProvider) {
+        supplementaryJob?.cancel()
+        supplementaryJob = viewModelScope.launch {
+            val sections = repository.getHomeSupplementarySections(provider)
+            if (repository.selectedProvider.value == provider) {
+                _supplementarySections.value = sections
+            }
         }
     }
 }

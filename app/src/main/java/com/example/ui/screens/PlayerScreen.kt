@@ -3,10 +3,13 @@ package com.example.ui.screens
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.media.AudioManager
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -20,12 +23,16 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -60,12 +67,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.BrightnessHigh
+import androidx.compose.material.icons.rounded.BrightnessLow
+import androidx.compose.material.icons.rounded.BrightnessMedium
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Pause
@@ -74,6 +90,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.SettingsRemote
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.SmartDisplay
@@ -88,6 +105,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -138,24 +156,33 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlin.math.roundToInt
 import com.example.R
 import com.example.data.JkAnimeHttpClient
 import com.example.model.AnimeProvider
 import com.example.model.DeviceMode
 import com.example.model.EpisodeItem
+import com.example.notifications.DeepLinkIntentHelper
 import com.example.player.EpisodeMediaSessionManager
+import com.example.ui.components.EpisodeCommentsSheet
 import com.example.ui.components.ErrorStateView
 import com.example.ui.components.LocalPipController
 import com.example.ui.components.TvRemoteShortcutsDialog
@@ -189,7 +216,35 @@ fun PlayerScreen(
     var isFullscreen by remember { mutableStateOf(true) }
     var showEpisodesSheet by remember { mutableStateOf(false) }
     var showServersSheet by remember { mutableStateOf(false) }
+    var showCommentsSheet by remember { mutableStateOf(false) }
     var showTvShortcutsDialog by remember { mutableStateOf(false) }
+
+    val shareEpisode: () -> Unit = {
+        val shareText = DeepLinkIntentHelper.buildEpisodeShareText(
+            title = state.animeTitle,
+            episodeNumber = state.episodeNumber,
+            slug = state.slug,
+            provider = state.provider,
+            explicitEpisodeUrl = state.episodeUrl
+        )
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, shareText)
+        }
+        context.startActivity(
+            Intent.createChooser(shareIntent, context.getString(R.string.share_episode_chooser))
+        )
+    }
+
+    if (showCommentsSheet && !isInPipMode) {
+        EpisodeCommentsSheet(
+            providerId = state.provider.id,
+            slug = state.slug,
+            animeTitle = state.animeTitle,
+            episodeNumber = state.episodeNumber,
+            onDismiss = { showCommentsSheet = false }
+        )
+    }
 
     if (showTvShortcutsDialog && !isInPipMode) {
         TvRemoteShortcutsDialog(
@@ -330,6 +385,8 @@ fun PlayerScreen(
                             hasServers = state.servers.isNotEmpty(),
                             onOpenEpisodes = { showEpisodesSheet = true },
                             onOpenServers = { showServersSheet = true },
+                            onOpenComments = { showCommentsSheet = true },
+                            onShareEpisode = shareEpisode,
                             onToggleFullscreen = { isFullscreen = !isFullscreen },
                             onShowTvShortcuts = { showTvShortcutsDialog = true },
                             onBack = onBack,
@@ -476,6 +533,28 @@ fun PlayerScreen(
                                     )
                                 }
                             }
+                        }
+                        IconButton(
+                            onClick = { showCommentsSheet = true },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("player_comments_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Forum,
+                                contentDescription = stringResource(R.string.comments_title)
+                            )
+                        }
+                        IconButton(
+                            onClick = shareEpisode,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("player_share_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Share,
+                                contentDescription = stringResource(R.string.cd_share)
+                            )
                         }
                     }
 
@@ -730,6 +809,24 @@ fun PlayerScreen(
     }
 }
 
+private enum class PlayerSwipeMode {
+    BRIGHTNESS,
+    VOLUME
+}
+
+private data class PlayerSwipeHud(
+    val mode: PlayerSwipeMode,
+    val fraction: Float
+)
+
+private data class VideoQualityOption(
+    val label: String,
+    val height: Int,
+    val bitrate: Int,
+    val groupIndex: Int,
+    val trackIndex: Int
+)
+
 @OptIn(UnstableApi::class)
 @Composable
 private fun NativeExoPlayerBox(
@@ -755,6 +852,8 @@ private fun NativeExoPlayerBox(
     hasServers: Boolean,
     onOpenEpisodes: () -> Unit,
     onOpenServers: () -> Unit,
+    onOpenComments: () -> Unit,
+    onShareEpisode: () -> Unit,
     onToggleFullscreen: () -> Unit,
     onShowTvShortcuts: () -> Unit,
     onBack: () -> Unit,
@@ -771,6 +870,9 @@ private fun NativeExoPlayerBox(
     val currentOnPrev by rememberUpdatedState(onPrevEpisode)
     val currentOnNext by rememberUpdatedState(onNextEpisode)
     val currentOnSaveProgress by rememberUpdatedState(onSaveProgress)
+    val audioManager = remember(context) {
+        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    }
 
     LaunchedEffect(isTvMode) {
         if (isTvMode) {
@@ -791,6 +893,19 @@ private fun NativeExoPlayerBox(
             .setDefaultRequestProperties(safeHeaders)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
             .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(4))
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                15_000, // minBufferMs
+                50_000, // maxBufferMs
+                1_200,  // bufferForPlaybackMs (faster initial start)
+                2_500   // bufferForPlaybackAfterRebufferMs
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
         val mediaItemBuilder = MediaItem.Builder().setUri(streamUrl)
         if (isHls ||
             streamUrl.contains(".m3u8", ignoreCase = true) ||
@@ -800,7 +915,12 @@ private fun NativeExoPlayerBox(
         }
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
+            .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_NETWORK)
             .build().apply {
+                setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 setMediaItem(mediaItemBuilder.build())
                 prepare()
                 if (resumePositionMs > 3_000L) {
@@ -814,14 +934,23 @@ private fun NativeExoPlayerBox(
     var isBuffering by remember { mutableStateOf(true) }
     var isEnded by remember(streamUrl) { mutableStateOf(false) }
     var currentPos by remember { mutableLongStateOf(0L) }
+    var bufferedPos by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+    var showRemainingTime by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var isControlsLocked by remember { mutableStateOf(false) }
     var lockedHintVisible by remember { mutableStateOf(false) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
+    var isHoldSpeedBoosted by remember { mutableStateOf(false) }
     var speedMenuExpanded by remember { mutableStateOf(false) }
+    var qualityMenuExpanded by remember { mutableStateOf(false) }
+    var videoQualityOptions by remember(streamUrl) { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
+    var activeVideoHeight by remember(streamUrl) { mutableIntStateOf(0) }
+    var selectedQualityHeight by remember(streamUrl) { mutableStateOf<Int?>(null) }
     var retriedTransient by remember(streamUrl) { mutableStateOf(false) }
     var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var resizeFeedbackLabel by remember { mutableStateOf<String?>(null) }
+    var resizeFeedbackSeq by remember { mutableIntStateOf(0) }
     var doubleTapFeedback by remember { mutableStateOf<String?>(null) }
     var doubleTapSeq by remember { mutableIntStateOf(0) }
     var scrubTargetFraction by remember { mutableStateOf<Float?>(null) }
@@ -832,6 +961,19 @@ private fun NativeExoPlayerBox(
     var autoNextCancelled by remember(streamUrl) { mutableStateOf(false) }
     var autoSkippedOpening by remember(streamUrl) { mutableStateOf(false) }
     var autoSkipBadgeVisible by remember(streamUrl) { mutableStateOf(false) }
+    var swipeBrightness by remember {
+        val initial = context.findActivity()?.window?.attributes?.screenBrightness
+            ?.takeIf { it in 0.05f..1f } ?: 0.55f
+        mutableFloatStateOf(initial)
+    }
+    var modifiedBrightness by remember { mutableStateOf(false) }
+    var swipeVolumeFraction by remember {
+        val maxVol = audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC)?.coerceAtLeast(1) ?: 15
+        val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: maxVol / 2
+        mutableFloatStateOf((curVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f))
+    }
+    var activeSwipeHud by remember { mutableStateOf<PlayerSwipeHud?>(null) }
+    var swipeHudSeq by remember { mutableIntStateOf(0) }
 
     val inEndingRange = duration > 180_000L && currentPos >= duration - 120_000L
 
@@ -849,6 +991,25 @@ private fun NativeExoPlayerBox(
         currentPos = clamped
     }
 
+    fun applyVideoQuality(option: VideoQualityOption?) {
+        val builder = exoPlayer.trackSelectionParameters.buildUpon()
+        if (option == null) {
+            builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+            selectedQualityHeight = null
+        } else {
+            val videoGroups = exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+            val targetGroup = videoGroups.getOrNull(option.groupIndex)
+            if (targetGroup != null && option.trackIndex in 0 until targetGroup.length) {
+                builder.setOverrideForType(
+                    TrackSelectionOverride(targetGroup.mediaTrackGroup, option.trackIndex)
+                )
+                selectedQualityHeight = option.height
+            }
+        }
+        exoPlayer.trackSelectionParameters = builder.build()
+        qualityMenuExpanded = false
+    }
+
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -860,10 +1021,56 @@ private fun NativeExoPlayerBox(
                 isEnded = playbackState == Player.STATE_ENDED
                 if (playbackState == Player.STATE_READY) {
                     duration = exoPlayer.duration.coerceAtLeast(0L)
+                    bufferedPos = exoPlayer.bufferedPosition.coerceAtLeast(0L)
+                }
+            }
+
+            override fun onTracksChanged(tracks: Tracks) {
+                val videoGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+                val bestByHeight = linkedMapOf<Int, VideoQualityOption>()
+                var selectedHeight = 0
+                videoGroups.forEachIndexed { groupIdx, group ->
+                    for (trackIdx in 0 until group.length) {
+                        if (!group.isTrackSupported(trackIdx)) continue
+                        val fmt = group.getTrackFormat(trackIdx)
+                        val height = fmt.height
+                        if (group.isTrackSelected(trackIdx) && height > 0) {
+                            selectedHeight = height
+                        }
+                        if (height > 0) {
+                            val bitrate = fmt.bitrate.coerceAtLeast(0)
+                            val label = when {
+                                height >= 2160 -> "${height}p (4K)"
+                                height >= 1080 -> "${height}p (FHD)"
+                                height >= 720 -> "${height}p (HD)"
+                                else -> "${height}p"
+                            }
+                            val existing = bestByHeight[height]
+                            if (existing == null || bitrate > existing.bitrate) {
+                                bestByHeight[height] = VideoQualityOption(
+                                    label = label,
+                                    height = height,
+                                    bitrate = bitrate,
+                                    groupIndex = groupIdx,
+                                    trackIndex = trackIdx
+                                )
+                            }
+                        }
+                    }
+                }
+                videoQualityOptions = bestByHeight.values.sortedByDescending { it.height }
+                if (selectedHeight > 0) {
+                    activeVideoHeight = selectedHeight
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                    exoPlayer.seekToDefaultPosition()
+                    exoPlayer.prepare()
+                    exoPlayer.play()
+                    return
+                }
                 val causes = generateSequence<Throwable>(error) { it.cause }.toList()
                 val httpCode = causes
                     .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
@@ -894,6 +1101,13 @@ private fun NativeExoPlayerBox(
             onSaveProgress(exoPlayer.currentPosition, exoPlayer.duration.coerceAtLeast(0L))
             exoPlayer.removeListener(listener)
             exoPlayer.release()
+            if (modifiedBrightness) {
+                context.findActivity()?.window?.let { window ->
+                    val lp = window.attributes
+                    lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    window.attributes = lp
+                }
+            }
         }
     }
 
@@ -961,17 +1175,18 @@ private fun NativeExoPlayerBox(
         )
     }
 
-    // Periodic UI position & watch history sync
+    // Periodic UI position, buffered fraction & watch history sync
     LaunchedEffect(exoPlayer) {
         var tick = 0
         while (true) {
             currentPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            bufferedPos = exoPlayer.bufferedPosition.coerceAtLeast(0L)
             duration = exoPlayer.duration.coerceAtLeast(0L)
             tick++
-            if (tick % 5 == 0 && duration > 0L) {
+            if (tick % 10 == 0 && duration > 0L) {
                 onSaveProgress(currentPos, duration)
             }
-            delay(1_000L)
+            delay(500L)
         }
     }
 
@@ -997,10 +1212,10 @@ private fun NativeExoPlayerBox(
     }
 
     // Auto-hide ExoPlayer controls (and Skip Opening/Ending inside it) after 3.5s
-    LaunchedEffect(controlsVisible, isPlaying, isControlsLocked, isScrubbing) {
+    LaunchedEffect(controlsVisible, isPlaying, isControlsLocked, isScrubbing, speedMenuExpanded, qualityMenuExpanded) {
         if (isControlsLocked) {
             controlsVisible = false
-        } else if (controlsVisible && isPlaying && !isScrubbing) {
+        } else if (controlsVisible && isPlaying && !isScrubbing && !speedMenuExpanded && !qualityMenuExpanded) {
             delay(3_500L)
             controlsVisible = false
         }
@@ -1019,6 +1234,22 @@ private fun NativeExoPlayerBox(
         if (doubleTapFeedback != null) {
             delay(760L)
             doubleTapFeedback = null
+        }
+    }
+
+    // Auto-clear swipe brightness/volume HUD
+    LaunchedEffect(activeSwipeHud, swipeHudSeq) {
+        if (activeSwipeHud != null) {
+            delay(950L)
+            activeSwipeHud = null
+        }
+    }
+
+    // Auto-clear resize mode label pill
+    LaunchedEffect(resizeFeedbackLabel, resizeFeedbackSeq) {
+        if (resizeFeedbackLabel != null) {
+            delay(1_300L)
+            resizeFeedbackLabel = null
         }
     }
 
@@ -1171,8 +1402,18 @@ private fun NativeExoPlayerBox(
                     else -> false
                 }
             }
-            .pointerInput(exoPlayer, duration, isControlsLocked) {
+            .pointerInput(exoPlayer, duration, isControlsLocked, isInPipMode) {
                 detectTapGestures(
+                    onPress = {
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            if (isHoldSpeedBoosted) {
+                                isHoldSpeedBoosted = false
+                                exoPlayer.setPlaybackSpeed(playbackSpeed)
+                            }
+                        }
+                    },
                     onTap = {
                         if (isControlsLocked) {
                             lockedHintVisible = !lockedHintVisible
@@ -1197,7 +1438,80 @@ private fun NativeExoPlayerBox(
                             doubleTapFeedback = "+10s"
                         }
                         doubleTapSeq++
+                    },
+                    onLongPress = {
+                        if (!isControlsLocked && !isInPipMode) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            isHoldSpeedBoosted = true
+                            exoPlayer.setPlaybackSpeed(2.0f)
+                        }
                     }
+                )
+            }
+            .pointerInput(exoPlayer, isControlsLocked, isInPipMode, controlsVisible) {
+                var gestureMode: PlayerSwipeMode? = null
+                detectVerticalDragGestures(
+                    onDragStart = { startOffset ->
+                        if (isControlsLocked || isInPipMode) {
+                            gestureMode = null
+                            return@detectVerticalDragGestures
+                        }
+                        val startYFraction = if (size.height > 0) startOffset.y / size.height.toFloat() else 0.5f
+                        if (controlsVisible && startYFraction > 0.78f) {
+                            gestureMode = null
+                            return@detectVerticalDragGestures
+                        }
+                        gestureMode = if (startOffset.x < size.width / 2f) {
+                            PlayerSwipeMode.BRIGHTNESS
+                        } else {
+                            PlayerSwipeMode.VOLUME
+                        }
+                        if (gestureMode == PlayerSwipeMode.VOLUME && audioManager != null) {
+                            val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                            val curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            swipeVolumeFraction = (curVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f)
+                        }
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        val mode = gestureMode ?: return@detectVerticalDragGestures
+                        change.consume()
+                        val heightPx = size.height.coerceAtLeast(1).toFloat()
+                        val delta = -dragAmount / (heightPx * 0.65f)
+                        when (mode) {
+                            PlayerSwipeMode.BRIGHTNESS -> {
+                                val next = (swipeBrightness + delta).coerceIn(0.05f, 1f)
+                                swipeBrightness = next
+                                modifiedBrightness = true
+                                context.findActivity()?.window?.let { window ->
+                                    val lp = window.attributes
+                                    lp.screenBrightness = next
+                                    window.attributes = lp
+                                }
+                                activeSwipeHud = PlayerSwipeHud(
+                                    mode = PlayerSwipeMode.BRIGHTNESS,
+                                    fraction = next
+                                )
+                                swipeHudSeq++
+                            }
+                            PlayerSwipeMode.VOLUME -> {
+                                val am = audioManager ?: return@detectVerticalDragGestures
+                                val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                                val next = (swipeVolumeFraction + delta).coerceIn(0f, 1f)
+                                swipeVolumeFraction = next
+                                val targetStep = (next * maxVol).roundToInt().coerceIn(0, maxVol)
+                                if (am.getStreamVolume(AudioManager.STREAM_MUSIC) != targetStep) {
+                                    am.setStreamVolume(AudioManager.STREAM_MUSIC, targetStep, 0)
+                                }
+                                activeSwipeHud = PlayerSwipeHud(
+                                    mode = PlayerSwipeMode.VOLUME,
+                                    fraction = next
+                                )
+                                swipeHudSeq++
+                            }
+                        }
+                    },
+                    onDragEnd = { gestureMode = null },
+                    onDragCancel = { gestureMode = null }
                 )
             }
     ) {
@@ -1331,6 +1645,148 @@ private fun NativeExoPlayerBox(
             }
         }
 
+        // Hold-to-2x speed pill
+        AnimatedVisibility(
+            visible = isHoldSpeedBoosted && !isInPipMode,
+            enter = fadeIn(tween(120)) + scaleIn(initialScale = 0.9f),
+            exit = fadeOut(tween(120)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp)
+        ) {
+            Surface(
+                color = Color(0xDC0C101C),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FastForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.player_hold_speed_boost),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
+        // Brightness / Volume vertical swipe HUD
+        AnimatedVisibility(
+            visible = activeSwipeHud != null && !isInPipMode,
+            enter = fadeIn(tween(100)) + scaleIn(initialScale = 0.92f),
+            exit = fadeOut(tween(160)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 56.dp)
+        ) {
+            val hud = activeSwipeHud
+            if (hud != null) {
+                val pct = (hud.fraction * 100f).roundToInt().coerceIn(0, 100)
+                val hudIcon = when (hud.mode) {
+                    PlayerSwipeMode.BRIGHTNESS -> when {
+                        pct >= 70 -> Icons.Rounded.BrightnessHigh
+                        pct >= 30 -> Icons.Rounded.BrightnessMedium
+                        else -> Icons.Rounded.BrightnessLow
+                    }
+                    PlayerSwipeMode.VOLUME -> when {
+                        pct == 0 -> Icons.AutoMirrored.Rounded.VolumeOff
+                        pct < 45 -> Icons.AutoMirrored.Rounded.VolumeDown
+                        else -> Icons.AutoMirrored.Rounded.VolumeUp
+                    }
+                }
+                val hudLabel = if (hud.mode == PlayerSwipeMode.BRIGHTNESS) {
+                    stringResource(R.string.player_brightness_label)
+                } else {
+                    stringResource(R.string.player_volume_label)
+                }
+                Surface(
+                    color = Color(0xDF0D111C),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(172.dp)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = hudIcon,
+                                    contentDescription = hudLabel,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = hudLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                            }
+                            Text(
+                                text = "$pct%",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { hud.fraction.coerceIn(0f, 1f) },
+                            color = MaterialTheme.colorScheme.secondary,
+                            trackColor = Color.White.copy(alpha = 0.22f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(CircleShape)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Resize mode feedback badge
+        AnimatedVisibility(
+            visible = resizeFeedbackLabel != null && !isInPipMode,
+            enter = fadeIn(tween(120)),
+            exit = fadeOut(tween(160)),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp)
+        ) {
+            Surface(
+                color = Color(0xD8121622),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f))
+            ) {
+                Text(
+                    text = resizeFeedbackLabel.orEmpty(),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                )
+            }
+        }
+
         // Auto-skip opening feedback badge
         AnimatedVisibility(
             visible = autoSkipBadgeVisible && !isInPipMode,
@@ -1410,6 +1866,68 @@ private fun NativeExoPlayerBox(
             }
         }
 
+        // Floating "Siguiente episodio" pill during ending window before playback ends
+        val showFloatingNextEpisode = !isEnded &&
+            hasNextEpisode &&
+            !isInPipMode &&
+            !isControlsLocked &&
+            duration > 150_000L &&
+            currentPos >= duration - 105_000L
+        val floatingNextBottomPad by animateDpAsState(
+            targetValue = if (controlsVisible) 92.dp else 18.dp,
+            animationSpec = tween(220),
+            label = "floating_next_bottom_pad"
+        )
+        AnimatedVisibility(
+            visible = showFloatingNextEpisode,
+            enter = slideInHorizontally(tween(260)) { it / 2 } + fadeIn(tween(220)),
+            exit = slideOutHorizontally(tween(200)) { it / 2 } + fadeOut(tween(180)),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = floatingNextBottomPad)
+        ) {
+            Surface(
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onNextEpisode()
+                },
+                shape = CircleShape,
+                color = Color(0xEB0A0E1A),
+                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+                tonalElevation = 10.dp,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("exo_floating_next_episode")
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 8.dp, end = 14.dp, top = 7.dp, bottom = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SkipNext,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.player_floating_next_ep, nextEpisodeNumber),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
         // End of episode banner (auto-next countdown OR manual choice)
         AnimatedVisibility(
             visible = isEnded && hasNextEpisode && !autoNextCancelled && !isInPipMode,
@@ -1420,9 +1938,9 @@ private fun NativeExoPlayerBox(
                 .padding(16.dp)
         ) {
             Surface(
-                color = Color(0xEA121622),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f))
+                color = Color(0xEA0C101B),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.72f))
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
@@ -1496,7 +2014,9 @@ private fun NativeExoPlayerBox(
                     .let { if (isFullscreen) it.displayCutoutPadding() else it }
                     .padding(12.dp)
             ) {
-                // Top Bar inside ExoPlayer controls
+                // Top Bar inside ExoPlayer controls (frosted glass pills)
+                val glassPillColor = Color(0xA80A0E18)
+                val glassPillBorder = Color.White.copy(alpha = 0.14f)
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -1506,20 +2026,28 @@ private fun NativeExoPlayerBox(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = if (isFullscreen) Modifier.weight(1f) else Modifier
                     ) {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.testTag("exo_back_button")
+                        Surface(
+                            color = glassPillColor,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, glassPillBorder),
+                            modifier = Modifier.size(40.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                contentDescription = stringResource(R.string.cd_back),
-                                tint = Color.White
-                            )
+                            IconButton(
+                                onClick = onBack,
+                                modifier = Modifier.testTag("exo_back_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                    contentDescription = stringResource(R.string.cd_back),
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                         if (isFullscreen) {
-                            Spacer(modifier = Modifier.width(4.dp))
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
@@ -1541,6 +2069,20 @@ private fun NativeExoPlayerBox(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
+                        } else {
+                            Surface(
+                                color = glassPillColor,
+                                shape = CircleShape,
+                                border = BorderStroke(1.dp, glassPillBorder)
+                            ) {
+                                Text(
+                                    text = "Ep. $episodeNumber",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
                         }
                     }
 
@@ -1553,12 +2095,12 @@ private fun NativeExoPlayerBox(
                     ) {
                         // Skip Opening / Ending integrated with ExoPlayer controls
                         Surface(
-                            color = Color(0xCC14141C),
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)),
+                            color = Color(0xD4101422),
+                            shape = CircleShape,
+                            border = BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)),
                             modifier = Modifier
                                 .heightIn(min = 38.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(CircleShape)
                                 .clickable {
                                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     performSkipOpEd()
@@ -1566,7 +2108,7 @@ private fun NativeExoPlayerBox(
                                 .testTag("exo_skip_op_ed_button")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -1591,10 +2133,11 @@ private fun NativeExoPlayerBox(
 
                         if (hasServers) {
                             Surface(
-                                color = Color(0x99000000),
-                                shape = RoundedCornerShape(8.dp),
+                                color = glassPillColor,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, glassPillBorder),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable {
                                         controlsVisible = false
                                         onOpenServers()
@@ -1606,7 +2149,7 @@ private fun NativeExoPlayerBox(
                                     contentDescription = stringResource(R.string.servers_title),
                                     tint = Color.White,
                                     modifier = Modifier
-                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        .padding(horizontal = 9.dp, vertical = 7.dp)
                                         .size(18.dp)
                                 )
                             }
@@ -1614,10 +2157,11 @@ private fun NativeExoPlayerBox(
 
                         if (hasEpisodesList) {
                             Surface(
-                                color = Color(0x99000000),
-                                shape = RoundedCornerShape(8.dp),
+                                color = glassPillColor,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, glassPillBorder),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable {
                                         controlsVisible = false
                                         onOpenEpisodes()
@@ -1629,19 +2173,66 @@ private fun NativeExoPlayerBox(
                                     contentDescription = stringResource(R.string.player_episodes_sheet_title),
                                     tint = Color.White,
                                     modifier = Modifier
-                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        .padding(horizontal = 9.dp, vertical = 7.dp)
                                         .size(18.dp)
                                 )
                             }
                         }
 
+                        // Episode comments button
+                        Surface(
+                            color = glassPillColor,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, glassPillBorder),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    controlsVisible = false
+                                    onOpenComments()
+                                }
+                                .testTag("exo_comments_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Forum,
+                                contentDescription = stringResource(R.string.comments_title),
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .size(18.dp)
+                            )
+                        }
+
+                        // Share episode link button
+                        Surface(
+                            color = glassPillColor,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, glassPillBorder),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    controlsVisible = false
+                                    onShareEpisode()
+                                }
+                                .testTag("exo_share_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Share,
+                                contentDescription = stringResource(R.string.cd_share),
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .size(18.dp)
+                            )
+                        }
+
                         // Picture-in-Picture button
                         if (pipController?.isPipSupported == true) {
                             Surface(
-                                color = Color(0x99000000),
-                                shape = RoundedCornerShape(8.dp),
+                                color = glassPillColor,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, glassPillBorder),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable {
                                         controlsVisible = false
                                         pipController.enterPictureInPicture()
@@ -1653,7 +2244,7 @@ private fun NativeExoPlayerBox(
                                     contentDescription = stringResource(R.string.player_pip),
                                     tint = Color.White,
                                     modifier = Modifier
-                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        .padding(horizontal = 9.dp, vertical = 7.dp)
                                         .size(18.dp)
                                 )
                             }
@@ -1661,10 +2252,11 @@ private fun NativeExoPlayerBox(
 
                         // Lock controls button
                         Surface(
-                            color = Color(0x99000000),
-                            shape = RoundedCornerShape(8.dp),
+                            color = glassPillColor,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, glassPillBorder),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .clickable {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     isControlsLocked = true
@@ -1678,23 +2270,37 @@ private fun NativeExoPlayerBox(
                                 contentDescription = "Bloquear controles",
                                 tint = Color.White,
                                 modifier = Modifier
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .padding(horizontal = 9.dp, vertical = 7.dp)
                                     .size(18.dp)
                             )
                         }
 
                         // Video Resize / Aspect Mode Cycle
+                        val fitMsg = stringResource(R.string.player_resize_fit)
+                        val zoomMsg = stringResource(R.string.player_resize_zoom)
+                        val fillMsg = stringResource(R.string.player_resize_fill)
                         Surface(
-                            color = Color(0x99000000),
-                            shape = RoundedCornerShape(8.dp),
+                            color = glassPillColor,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, glassPillBorder),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .clickable {
                                     resizeMode = when (resizeMode) {
-                                        AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                        AspectRatioFrameLayout.RESIZE_MODE_FIT -> {
+                                            resizeFeedbackLabel = zoomMsg
+                                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                        }
+                                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> {
+                                            resizeFeedbackLabel = fillMsg
+                                            AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                        }
+                                        else -> {
+                                            resizeFeedbackLabel = fitMsg
+                                            AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                        }
                                     }
+                                    resizeFeedbackSeq++
                                 }
                                 .testTag("exo_resize_mode")
                         ) {
@@ -1703,21 +2309,95 @@ private fun NativeExoPlayerBox(
                                 contentDescription = "Cambiar proporción de pantalla",
                                 tint = Color.White,
                                 modifier = Modifier
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .padding(horizontal = 9.dp, vertical = 7.dp)
                                     .size(18.dp)
                             )
                         }
 
+                        // Video Resolution / Quality selector
+                        Box {
+                            val qualityBadgeText = when {
+                                selectedQualityHeight != null -> "${selectedQualityHeight}p"
+                                activeVideoHeight > 0 -> "${stringResource(R.string.player_quality_auto)} · ${activeVideoHeight}p"
+                                else -> stringResource(R.string.player_quality_auto)
+                            }
+                            Surface(
+                                color = glassPillColor,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, glassPillBorder),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { qualityMenuExpanded = true }
+                                    .testTag("exo_quality_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.HighQuality,
+                                        contentDescription = stringResource(R.string.player_quality_title),
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = qualityBadgeText,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = qualityMenuExpanded,
+                                onDismissRequest = { qualityMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (activeVideoHeight > 0) {
+                                                "Automático (${activeVideoHeight}p)"
+                                            } else {
+                                                "Automático (Adaptativo)"
+                                            },
+                                            fontWeight = if (selectedQualityHeight == null) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    trailingIcon = if (selectedQualityHeight == null) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                    } else null,
+                                    onClick = { applyVideoQuality(null) }
+                                )
+                                videoQualityOptions.forEach { option ->
+                                    val selected = selectedQualityHeight == option.height
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = option.label,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        trailingIcon = if (selected) {
+                                            { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                        } else null,
+                                        onClick = { applyVideoQuality(option) }
+                                    )
+                                }
+                            }
+                        }
+
                         Box {
                             Surface(
-                                color = Color(0x99000000),
-                                shape = RoundedCornerShape(8.dp),
+                                color = glassPillColor,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, glassPillBorder),
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable { speedMenuExpanded = true }
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
@@ -1739,9 +2419,17 @@ private fun NativeExoPlayerBox(
                                 expanded = speedMenuExpanded,
                                 onDismissRequest = { speedMenuExpanded = false }
                             ) {
-                                listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
+                                listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
                                     DropdownMenuItem(
-                                        text = { Text("${speed}x") },
+                                        text = {
+                                            Text(
+                                                text = "${speed}x",
+                                                fontWeight = if (playbackSpeed == speed) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        trailingIcon = if (playbackSpeed == speed) {
+                                            { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                        } else null,
                                         onClick = {
                                             playbackSpeed = speed
                                             exoPlayer.setPlaybackSpeed(speed)
@@ -1754,10 +2442,10 @@ private fun NativeExoPlayerBox(
                     }
                 }
 
-                // Center Transport Controls
+                // Center Transport Controls (frosted rings + luminous Play/Pause halo)
                 Row(
                     modifier = Modifier.align(Alignment.Center),
-                    horizontalArrangement = Arrangement.spacedBy(if (isFullscreen) 20.dp else 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (isFullscreen) 22.dp else 24.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (isFullscreen && hasPrevEpisode) {
@@ -1769,7 +2457,8 @@ private fun NativeExoPlayerBox(
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(CircleShape)
-                                .background(Color(0x66000000))
+                                .background(glassPillColor)
+                                .border(1.dp, glassPillBorder, CircleShape)
                                 .testTag("exo_prev_episode")
                         ) {
                             Icon(
@@ -1786,34 +2475,45 @@ private fun NativeExoPlayerBox(
                             exoPlayer.seekTo((exoPlayer.currentPosition - 10_000L).coerceAtLeast(0L))
                         },
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(50.dp)
                             .clip(CircleShape)
-                            .background(Color(0x66000000))
+                            .background(glassPillColor)
+                            .border(1.dp, glassPillBorder, CircleShape)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Replay10,
                             contentDescription = "Retroceder 10 segundos",
                             tint = Color.White,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(27.dp)
                         )
                     }
 
-                    IconButton(
-                        onClick = {
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        },
+                    Box(
                         modifier = Modifier
-                            .size(60.dp)
+                            .size(72.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                            .testTag("exo_play_pause")
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.24f))
+                            .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f), CircleShape),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = stringResource(R.string.cd_play_pause),
-                            tint = Color.White,
-                            modifier = Modifier.size(34.dp)
-                        )
+                        IconButton(
+                            onClick = {
+                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            },
+                            modifier = Modifier
+                                .size(58.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .border(1.dp, Color.White.copy(alpha = 0.32f), CircleShape)
+                                .testTag("exo_play_pause")
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = stringResource(R.string.cd_play_pause),
+                                tint = Color.White,
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
                     }
 
                     IconButton(
@@ -1822,15 +2522,16 @@ private fun NativeExoPlayerBox(
                             exoPlayer.seekTo(if (duration > 0L) target.coerceAtMost(duration) else target)
                         },
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(50.dp)
                             .clip(CircleShape)
-                            .background(Color(0x66000000))
+                            .background(glassPillColor)
+                            .border(1.dp, glassPillBorder, CircleShape)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Forward10,
                             contentDescription = "Adelantar 10 segundos",
                             tint = Color.White,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(27.dp)
                         )
                     }
 
@@ -1843,7 +2544,8 @@ private fun NativeExoPlayerBox(
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(CircleShape)
-                                .background(Color(0x66000000))
+                                .background(glassPillColor)
+                                .border(1.dp, glassPillBorder, CircleShape)
                                 .testTag("exo_next_episode")
                         ) {
                             Icon(
@@ -1921,106 +2623,156 @@ private fun NativeExoPlayerBox(
                             color = Color.White.copy(alpha = 0.78f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 4.dp)
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        color = Color(0xC2090D16),
+                        shape = RoundedCornerShape(18.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = formatDuration(displayedTimeMs),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isScrubbing) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isScrubbing) MaterialTheme.colorScheme.primary else Color.White
-                        )
-                        BoxWithConstraints(
-                            contentAlignment = Alignment.CenterStart,
+                        Row(
                             modifier = Modifier
-                                .weight(1f)
-                                .height(36.dp)
-                                .padding(horizontal = 8.dp)
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val totalWidth = maxWidth
-                            // Subtle outer glow track while scrubbing
-                            if (trackGlowAlpha > 0.01f) {
+                            Text(
+                                text = formatDuration(displayedTimeMs),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isScrubbing) FontWeight.Bold else FontWeight.SemiBold,
+                                color = if (isScrubbing) MaterialTheme.colorScheme.primary else Color.White
+                            )
+                            BoxWithConstraints(
+                                contentAlignment = Alignment.CenterStart,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .padding(horizontal = 10.dp)
+                            ) {
+                                val totalWidth = maxWidth
+                                val bufferedFraction = if (duration > 0L) {
+                                    (bufferedPos.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                                } else {
+                                    0f
+                                }
+                                val endingStartFraction = if (duration > 150_000L) {
+                                    ((duration - 105_000L).toFloat() / duration.toFloat()).coerceIn(0.6f, 0.98f)
+                                } else {
+                                    1f
+                                }
+                                // Subtle outer glow track while scrubbing
+                                if (trackGlowAlpha > 0.01f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(displayFraction.coerceIn(0f, 1f))
+                                            .height(trackHeight + 6.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = trackGlowAlpha))
+                                    )
+                                }
+                                // Inactive track
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(trackHeight)
+                                        .clip(CircleShape)
+                                        .background(Color.White.copy(alpha = if (isScrubbing) 0.32f else 0.20f))
+                                )
+                                // Ending zone marker on scrub track
+                                if (endingStartFraction < 0.99f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .offset(x = totalWidth * endingStartFraction)
+                                            .width(totalWidth * (1f - endingStartFraction))
+                                            .height(trackHeight)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.38f))
+                                    )
+                                }
+                                // Buffered track
+                                if (bufferedFraction > 0.005f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(bufferedFraction)
+                                            .height(trackHeight)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.42f))
+                                    )
+                                }
+                                // Active progress track
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth(displayFraction.coerceIn(0f, 1f))
-                                        .height(trackHeight + 6.dp)
+                                        .height(trackHeight)
                                         .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = trackGlowAlpha))
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
+                                // Expanding thumb
+                                val thumbOffsetX = ((totalWidth - thumbSize) * displayFraction.coerceIn(0f, 1f))
+                                    .coerceAtLeast(0.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .offset(x = thumbOffsetX)
+                                        .size(thumbSize)
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                        .padding(2.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
+                                // Transparent M3 Slider preserves drag, tap, D-pad, and TalkBack semantics
+                                Slider(
+                                    value = displayFraction,
+                                    onValueChange = { fraction ->
+                                        if (duration > 0L) {
+                                            scrubTargetFraction = fraction.coerceIn(0f, 1f)
+                                            val target = (fraction * duration).toLong()
+                                            currentPos = target
+                                            exoPlayer.seekTo(target)
+                                        }
+                                    },
+                                    onValueChangeFinished = {
+                                        scrubTargetFraction = null
+                                    },
+                                    interactionSource = scrubInteractionSource,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color.Transparent,
+                                        activeTrackColor = Color.Transparent,
+                                        inactiveTrackColor = Color.Transparent
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                            // Inactive track
-                            Box(
+                            val rightDurationLabel = if (showRemainingTime && duration > 0L) {
+                                "-${formatDuration((duration - displayedTimeMs).coerceAtLeast(0L))}"
+                            } else {
+                                formatDuration(duration)
+                            }
+                            Text(
+                                text = rightDurationLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.88f),
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(trackHeight)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = if (isScrubbing) 0.36f else 0.24f))
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { showRemainingTime = !showRemainingTime }
+                                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                                    .testTag("exo_duration_toggle")
                             )
-                            // Active progress track
-                            Box(
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = onToggleFullscreen,
                                 modifier = Modifier
-                                    .fillMaxWidth(displayFraction.coerceIn(0f, 1f))
-                                    .height(trackHeight)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                            // Expanding thumb
-                            val thumbOffsetX = ((totalWidth - thumbSize) * displayFraction.coerceIn(0f, 1f))
-                                .coerceAtLeast(0.dp)
-                            Box(
-                                modifier = Modifier
-                                    .offset(x = thumbOffsetX)
-                                    .size(thumbSize)
-                                    .clip(CircleShape)
-                                    .background(Color.White)
-                                    .padding(2.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                            // Transparent M3 Slider preserves drag, tap, D-pad, and TalkBack semantics
-                            Slider(
-                                value = displayFraction,
-                                onValueChange = { fraction ->
-                                    if (duration > 0L) {
-                                        scrubTargetFraction = fraction.coerceIn(0f, 1f)
-                                        val target = (fraction * duration).toLong()
-                                        currentPos = target
-                                        exoPlayer.seekTo(target)
-                                    }
-                                },
-                                onValueChangeFinished = {
-                                    scrubTargetFraction = null
-                                },
-                                interactionSource = scrubInteractionSource,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color.Transparent,
-                                    activeTrackColor = Color.Transparent,
-                                    inactiveTrackColor = Color.Transparent
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                        Text(
-                            text = formatDuration(duration),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.85f)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        IconButton(
-                            onClick = onToggleFullscreen,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .testTag("exo_fullscreen_toggle")
-                        ) {
-                            Icon(
-                                imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                                contentDescription = stringResource(R.string.cd_fullscreen),
-                                tint = Color.White
-                            )
+                                    .size(44.dp)
+                                    .testTag("exo_fullscreen_toggle")
+                            ) {
+                                Icon(
+                                    imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                    contentDescription = stringResource(R.string.cd_fullscreen),
+                                    tint = Color.White
+                                )
+                            }
                         }
                     }
                 }

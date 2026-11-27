@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.model.AppColorTheme
 import com.example.model.DeviceMode
 import com.example.model.UserPreferences
 import kotlinx.coroutines.flow.Flow
@@ -24,10 +25,14 @@ class UserPreferencesStore(private val context: Context) {
     private val hasSelectedDeviceModeKey = booleanPreferencesKey("has_selected_device_mode")
     private val premiereAlertsEnabledKey = booleanPreferencesKey("premiere_alerts_enabled")
     private val notifiedPremiereKeysKey = stringPreferencesKey("notified_premiere_keys")
+    private val colorThemeKey = stringPreferencesKey("color_theme")
+    private val amoledBlackKey = booleanPreferencesKey("amoled_black")
 
     val preferencesFlow: Flow<UserPreferences> = context.userPrefsDataStore.data.map { prefs ->
         val rawMode = prefs[deviceModeKey]
         val parsedMode = DeviceMode.entries.firstOrNull { it.name == rawMode } ?: DeviceMode.PHONE
+        val rawTheme = prefs[colorThemeKey]
+        val parsedTheme = AppColorTheme.entries.firstOrNull { it.name == rawTheme } ?: AppColorTheme.KITSUNE_RED
         UserPreferences(
             autoPlayNext = prefs[autoPlayNextKey] ?: true,
             autoSkipOpening = prefs[autoSkipOpeningKey] ?: false,
@@ -35,7 +40,9 @@ class UserPreferencesStore(private val context: Context) {
             deviceMode = parsedMode,
             hasSelectedDeviceMode = prefs[hasSelectedDeviceModeKey] ?: false,
             premiereAlertsEnabled = prefs[premiereAlertsEnabledKey] ?: false,
-            notifiedPremiereKeys = decodeStringList(prefs[notifiedPremiereKeysKey])
+            notifiedPremiereKeys = decodeStringList(prefs[notifiedPremiereKeysKey]),
+            colorTheme = parsedTheme,
+            amoledBlack = prefs[amoledBlackKey] ?: false
         )
     }
 
@@ -45,6 +52,18 @@ class UserPreferencesStore(private val context: Context) {
             if (markSelected) {
                 prefs[hasSelectedDeviceModeKey] = true
             }
+        }
+    }
+
+    suspend fun setColorTheme(theme: AppColorTheme) {
+        context.userPrefsDataStore.edit { prefs ->
+            prefs[colorThemeKey] = theme.name
+        }
+    }
+
+    suspend fun setAmoledBlack(enabled: Boolean) {
+        context.userPrefsDataStore.edit { prefs ->
+            prefs[amoledBlackKey] = enabled
         }
     }
 

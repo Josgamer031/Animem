@@ -9,16 +9,21 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.Coil
 import coil.ImageLoader
 import com.example.data.JkAnimeRepository
 import com.example.model.LaunchDeepLink
+import com.example.model.UserPreferences
 import com.example.notifications.DeepLinkIntentHelper
 import com.example.ui.components.LocalPipController
 import com.example.ui.components.PipController
 import com.example.ui.navigation.KitsuneApp
 import com.example.ui.theme.KitsuneStreamTheme
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 
 class MainActivity : ComponentActivity() {
 
@@ -60,8 +65,18 @@ class MainActivity : ComponentActivity() {
                 .build()
         )
         setContent {
+            val prefsFlow = remember(repository) {
+                repository.userPreferences ?: flowOf(UserPreferences())
+            }
+            val userPrefs by prefsFlow.collectAsStateWithLifecycle(
+                initialValue = UserPreferences()
+            )
             CompositionLocalProvider(LocalPipController provides pipController) {
-                KitsuneStreamTheme(darkTheme = true) {
+                KitsuneStreamTheme(
+                    darkTheme = true,
+                    colorTheme = userPrefs.colorTheme,
+                    amoledBlack = userPrefs.amoledBlack
+                ) {
                     KitsuneApp(
                         repository = repository,
                         deepLinkState = pendingDeepLink,

@@ -50,25 +50,44 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.CloudSync
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.SportsBasketball
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.TheaterComedy
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -92,6 +111,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -110,14 +130,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.R
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.model.AnimeProvider
 import com.example.model.AnimeSummary
+import com.example.model.AppColorTheme
+import com.example.model.CloudSyncState
 import com.example.model.DeviceMode
 import com.example.model.FavoriteAnime
 import com.example.model.HomeFeed
+import com.example.model.HomeSupplementarySections
 import com.example.model.UserPreferences
 import com.example.model.UserProfile
 import com.example.model.WatchHistoryEntry
@@ -126,6 +151,8 @@ import com.example.ui.components.AnimatedProviderSwitcher
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.CoverPalette
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.GoogleAuthUiHelper
+import com.example.ui.components.GoogleSignInOutcome
 import com.example.ui.components.HomeLoadingSkeleton
 import com.example.ui.components.LatestEpisodeCard
 import com.example.ui.components.ProfileSwitcherDialog
@@ -141,6 +168,7 @@ import com.example.ui.viewmodel.HomeUiState
 import com.example.ui.viewmodel.HomeViewModel
 import com.example.widget.KitsuneHomeWidgetProvider
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -151,11 +179,15 @@ fun HomeScreen(
     onPlayEpisode: (slug: String, episode: Int, title: String, coverUrl: String, providerId: String, episodeUrl: String) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenExplore: () -> Unit,
+    onOpenSchedule: () -> Unit,
+    onOpenGenre: (genreSlug: String) -> Unit,
+    onOpenCategory: (status: String, type: String) -> Unit,
     onUnlockCloudflare: (targetUrl: String, onUnlocked: () -> Unit) -> Unit,
     onShowTvShortcuts: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val supplementary by viewModel.supplementarySections.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val selectedProvider by viewModel.selectedProvider.collectAsStateWithLifecycle()
     val continueWatching by viewModel.continueWatching.collectAsStateWithLifecycle()
@@ -163,6 +195,7 @@ fun HomeScreen(
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val activeProfile by viewModel.activeProfile.collectAsStateWithLifecycle()
     val userPreferences by viewModel.userPreferences.collectAsStateWithLifecycle()
+    val cloudSyncState by viewModel.cloudSyncState.collectAsStateWithLifecycle()
     val isTvMode = userPreferences.deviceMode == DeviceMode.SMART_TV
     val haptics = LocalHapticFeedback.current
 
@@ -190,12 +223,16 @@ fun HomeScreen(
     if (showSettingsSheet) {
         PlaybackSettingsBottomSheet(
             preferences = userPreferences,
+            cloudSyncState = cloudSyncState,
             activeProfile = activeProfile,
             selectedProvider = selectedProvider,
             onToggleAutoPlayNext = viewModel::setAutoPlayNext,
             onToggleAutoSkipOpening = viewModel::setAutoSkipOpening,
             onTogglePremiereAlerts = viewModel::setPremiereAlertsEnabled,
             onSelectDeviceMode = viewModel::setDeviceMode,
+            onSelectColorTheme = viewModel::setColorTheme,
+            onToggleAmoledBlack = viewModel::setAmoledBlack,
+            onSyncCloudNow = viewModel::syncCloudNow,
             onOpenTvShortcuts = {
                 showSettingsSheet = false
                 onShowTvShortcuts()
@@ -299,8 +336,14 @@ fun HomeScreen(
                         }
                     }
                     is HomeUiState.Success -> {
+                        val activeSupplementary = if (supplementary.provider == state.feed.provider) {
+                            supplementary
+                        } else {
+                            HomeSupplementarySections(provider = state.feed.provider)
+                        }
                         HomeFeedContent(
                             feed = state.feed,
+                            supplementary = activeSupplementary,
                             listState = listState,
                             heroPalette = heroPalette,
                             onActiveHeroChanged = { cover -> activeHeroCoverUrl = cover },
@@ -310,6 +353,9 @@ fun HomeScreen(
                             onOpenAnime = onOpenAnime,
                             onPlayEpisode = onPlayEpisode,
                             onOpenExplore = onOpenExplore,
+                            onOpenSchedule = onOpenSchedule,
+                            onOpenGenre = onOpenGenre,
+                            onOpenCategory = onOpenCategory,
                             onSurpriseMe = {
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.pickRandomAnime()?.let { picked ->
@@ -525,9 +571,30 @@ private fun HomeTopHeader(
     }
 }
 
+private data class HomeGenreItem(
+    val slug: String,
+    val label: String,
+    val icon: ImageVector,
+    val accentHex: Long
+)
+
+private val HOME_GENRE_QUICK_LIST = listOf(
+    HomeGenreItem("accion", "Acción", Icons.Rounded.LocalFireDepartment, 0xFFFF4D6D),
+    HomeGenreItem("isekai", "Isekai", Icons.Rounded.Public, 0xFF7C4DFF),
+    HomeGenreItem("fantasia", "Fantasía", Icons.Rounded.AutoAwesome, 0xFF00B4D8),
+    HomeGenreItem("romance", "Romance", Icons.Rounded.Favorite, 0xFFF72585),
+    HomeGenreItem("shounen", "Shounen", Icons.Rounded.Bolt, 0xFFFF9F1C),
+    HomeGenreItem("sci-fi", "Sci-Fi", Icons.Rounded.Movie, 0xFF2EC4B6),
+    HomeGenreItem("comedia", "Comedia", Icons.Rounded.TheaterComedy, 0xFFFFBF69),
+    HomeGenreItem("sobrenatural", "Sobrenatural", Icons.Rounded.Visibility, 0xFF9D4EDD),
+    HomeGenreItem("deportes", "Deportes", Icons.Rounded.SportsBasketball, 0xFF38B000),
+    HomeGenreItem("seinen", "Seinen", Icons.Rounded.DoneAll, 0xFF5C6BC0)
+)
+
 @Composable
 private fun HomeFeedContent(
     feed: HomeFeed,
+    supplementary: HomeSupplementarySections,
     listState: LazyListState,
     heroPalette: CoverPalette,
     onActiveHeroChanged: (String?) -> Unit,
@@ -537,12 +604,34 @@ private fun HomeFeedContent(
     onOpenAnime: (slug: String, providerId: String) -> Unit,
     onPlayEpisode: (slug: String, episode: Int, title: String, coverUrl: String, providerId: String, episodeUrl: String) -> Unit,
     onOpenExplore: () -> Unit,
+    onOpenSchedule: () -> Unit,
+    onOpenGenre: (genreSlug: String) -> Unit,
+    onOpenCategory: (status: String, type: String) -> Unit,
     onSurpriseMe: () -> Unit
 ) {
     val posterWidth = if (isTvMode) 166.dp else 142.dp
     val latestWidth = if (isTvMode) 216.dp else 188.dp
 
-    // Deduplicate sharedElement keys across sections so Compose SharedTransitionScope never sees duplicate keys
+    val distinctTodaySchedule = remember(supplementary.todaySchedule) {
+        supplementary.todaySchedule.distinctBy { "${it.provider.id}_${it.slug}" }
+    }
+    val distinctAiring = remember(feed.airing) {
+        feed.airing.distinctBy { "${it.provider.id}_${it.slug}" }
+    }
+    val distinctMovies = remember(supplementary.movies) {
+        supplementary.movies.distinctBy { "${it.provider.id}_${it.slug}" }
+    }
+    val distinctOvas = remember(supplementary.ovas) {
+        supplementary.ovas.distinctBy { "${it.provider.id}_${it.slug}" }
+    }
+    val distinctCompleted = remember(supplementary.completed) {
+        supplementary.completed.distinctBy { "${it.provider.id}_${it.slug}" }
+    }
+    val distinctRecent = remember(feed.recentAdded) {
+        feed.recentAdded.distinctBy { "${it.provider.id}_${it.slug}" }
+    }
+
+    // Deduplicate sharedElement keys across all sections so Compose SharedTransitionScope never sees duplicate keys
     val featuredKeys = remember(feed.featured) {
         feed.featured.map { posterSharedKey(it.provider.id, it.slug) }.toSet()
     }
@@ -551,16 +640,36 @@ private fun HomeFeedContent(
             .filterNot { it in featuredKeys }
             .toSet()
     }
-    val airingKeys = remember(feed.airing, featuredKeys, favoriteKeys) {
-        feed.airing.map { posterSharedKey(it.provider.id, it.slug) }
+    val todayScheduleKeys = remember(distinctTodaySchedule, featuredKeys, favoriteKeys) {
+        distinctTodaySchedule.map { posterSharedKey(it.provider.id, it.slug) }
             .filterNot { it in featuredKeys || it in favoriteKeys }
+            .toSet()
+    }
+    val airingKeys = remember(distinctAiring, featuredKeys, favoriteKeys, todayScheduleKeys) {
+        distinctAiring.map { posterSharedKey(it.provider.id, it.slug) }
+            .filterNot { it in featuredKeys || it in favoriteKeys || it in todayScheduleKeys }
+            .toSet()
+    }
+    val moviesKeys = remember(distinctMovies, featuredKeys, favoriteKeys, todayScheduleKeys, airingKeys) {
+        distinctMovies.map { posterSharedKey(it.provider.id, it.slug) }
+            .filterNot { it in featuredKeys || it in favoriteKeys || it in todayScheduleKeys || it in airingKeys }
+            .toSet()
+    }
+    val ovasKeys = remember(distinctOvas, featuredKeys, favoriteKeys, todayScheduleKeys, airingKeys, moviesKeys) {
+        distinctOvas.map { posterSharedKey(it.provider.id, it.slug) }
+            .filterNot { it in featuredKeys || it in favoriteKeys || it in todayScheduleKeys || it in airingKeys || it in moviesKeys }
+            .toSet()
+    }
+    val completedKeys = remember(distinctCompleted, featuredKeys, favoriteKeys, todayScheduleKeys, airingKeys, moviesKeys, ovasKeys) {
+        distinctCompleted.map { posterSharedKey(it.provider.id, it.slug) }
+            .filterNot { it in featuredKeys || it in favoriteKeys || it in todayScheduleKeys || it in airingKeys || it in moviesKeys || it in ovasKeys }
             .toSet()
     }
 
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 122.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(top = 122.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         if (feed.featured.isNotEmpty()) {
@@ -580,17 +689,18 @@ private fun HomeFeedContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilledTonalButton(
                     onClick = onSurpriseMe,
                     shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = heroPalette.vibrant.copy(alpha = 0.16f),
                         contentColor = heroPalette.vibrant
                     ),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1.1f)
                         .heightIn(min = 48.dp)
                         .testTag("home_surprise_button")
                 ) {
@@ -599,19 +709,48 @@ private fun HomeFeedContent(
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = stringResource(R.string.home_surprise_me),
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenSchedule,
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("home_schedule_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.CalendarMonth,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.home_open_schedule),
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
                 OutlinedButton(
                     onClick = onOpenExplore,
                     shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(0.95f)
                         .heightIn(min = 48.dp)
                         .testTag("home_browse_all_button")
                 ) {
@@ -621,11 +760,13 @@ private fun HomeFeedContent(
                         tint = MaterialTheme.colorScheme.secondary,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = stringResource(R.string.nav_explore),
                         color = MaterialTheme.colorScheme.onBackground,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -702,6 +843,68 @@ private fun HomeFeedContent(
             }
         }
 
+        // Section: Quick Genre Discovery Strip
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionHeader(
+                    title = stringResource(R.string.section_genres),
+                    actionLabel = stringResource(R.string.home_see_all),
+                    onActionClick = onOpenExplore
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    itemsIndexed(
+                        items = HOME_GENRE_QUICK_LIST,
+                        key = { _, genre -> "home_genre_${genre.slug}" }
+                    ) { index, genre ->
+                        val accentColor = Color(genre.accentHex)
+                        StaggeredReveal(index = index, maxStaggerItems = 6) {
+                            Surface(
+                                onClick = { onOpenGenre(genre.slug) },
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
+                                tonalElevation = 2.dp,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .tvFocusHighlight(shape = RoundedCornerShape(14.dp))
+                                    .testTag("home_genre_chip_${genre.slug}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .clip(CircleShape)
+                                            .background(accentColor.copy(alpha = 0.18f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = genre.icon,
+                                            contentDescription = null,
+                                            tint = accentColor,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = genre.label,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (feed.latestEpisodes.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -743,21 +946,58 @@ private fun HomeFeedContent(
             }
         }
 
-        if (feed.airing.isNotEmpty()) {
+        // Section: Today's Airing Schedule
+        if (distinctTodaySchedule.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionHeader(
-                        title = stringResource(R.string.section_airing_spotlight),
-                        accentLabel = "${feed.airing.size}",
-                        actionLabel = stringResource(R.string.home_see_all),
-                        onActionClick = onOpenExplore
+                        title = stringResource(R.string.section_today_schedule),
+                        accentLabel = supplementary.todayDayLabel.ifBlank { "${distinctTodaySchedule.size}" },
+                        actionLabel = stringResource(R.string.home_open_schedule),
+                        onActionClick = onOpenSchedule
                     )
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         itemsIndexed(
-                            items = feed.airing,
+                            items = distinctTodaySchedule,
+                            key = { _, item -> "sched_${item.provider.id}_${item.slug}" }
+                        ) { index, item ->
+                            val sharedKey = posterSharedKey(item.provider.id, item.slug)
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = item.title,
+                                    coverUrl = item.coverUrl,
+                                    badge = item.releaseTime.ifBlank { supplementary.todayDayLabel.ifBlank { "Hoy" } },
+                                    subtitle = item.episodeLabel.ifBlank { item.provider.badgeText },
+                                    sharedElementKey = if (sharedKey in todayScheduleKeys) sharedKey else null,
+                                    onClick = { onOpenAnime(item.slug, item.provider.id) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "today_schedule_card_${item.slug}"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (distinctAiring.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(
+                        title = stringResource(R.string.section_airing_spotlight),
+                        accentLabel = "${distinctAiring.size}",
+                        actionLabel = stringResource(R.string.home_see_all),
+                        onActionClick = { onOpenCategory("emision", "") }
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            items = distinctAiring,
                             key = { _, anime -> "air_${anime.provider.id}_${anime.slug}" }
                         ) { index, anime ->
                             val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
@@ -779,12 +1019,123 @@ private fun HomeFeedContent(
             }
         }
 
-        if (feed.recentAdded.isNotEmpty()) {
+        // Section: Anime Movies
+        if (distinctMovies.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(
+                        title = stringResource(R.string.section_movies),
+                        accentLabel = "${distinctMovies.size}",
+                        actionLabel = stringResource(R.string.home_see_all),
+                        onActionClick = { onOpenCategory("", "peliculas") }
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            items = distinctMovies,
+                            key = { _, anime -> "mov_${anime.provider.id}_${anime.slug}" }
+                        ) { index, anime ->
+                            val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = anime.title,
+                                    coverUrl = anime.coverUrl,
+                                    badge = anime.type.ifBlank { "Película" },
+                                    subtitle = anime.episodeBadge.ifBlank { anime.provider.badgeText },
+                                    sharedElementKey = if (sharedKey in moviesKeys) sharedKey else null,
+                                    onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "movie_card_${anime.slug}"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section: OVAs & Specials
+        if (distinctOvas.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(
+                        title = stringResource(R.string.section_ovas),
+                        accentLabel = "${distinctOvas.size}",
+                        actionLabel = stringResource(R.string.home_see_all),
+                        onActionClick = { onOpenCategory("", "ovas") }
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            items = distinctOvas,
+                            key = { _, anime -> "ova_${anime.provider.id}_${anime.slug}" }
+                        ) { index, anime ->
+                            val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = anime.title,
+                                    coverUrl = anime.coverUrl,
+                                    badge = anime.type.ifBlank { "OVA" },
+                                    subtitle = anime.episodeBadge.ifBlank { anime.provider.badgeText },
+                                    sharedElementKey = if (sharedKey in ovasKeys) sharedKey else null,
+                                    onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "ova_card_${anime.slug}"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section: Completed Series for Binge-Watching
+        if (distinctCompleted.isNotEmpty()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(
+                        title = stringResource(R.string.section_completed),
+                        accentLabel = "${distinctCompleted.size}",
+                        actionLabel = stringResource(R.string.home_see_all),
+                        onActionClick = { onOpenCategory("finalizado", "") }
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(
+                            items = distinctCompleted,
+                            key = { _, anime -> "comp_${anime.provider.id}_${anime.slug}" }
+                        ) { index, anime ->
+                            val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
+                            StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                AnimePosterCard(
+                                    title = anime.title,
+                                    coverUrl = anime.coverUrl,
+                                    badge = anime.status.ifBlank { "Finalizado" },
+                                    subtitle = anime.type.ifBlank { anime.provider.badgeText },
+                                    sharedElementKey = if (sharedKey in completedKeys) sharedKey else null,
+                                    onClick = { onOpenAnime(anime.slug, anime.provider.id) },
+                                    modifier = Modifier.width(posterWidth),
+                                    testTag = "completed_card_${anime.slug}"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (distinctRecent.isNotEmpty()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionHeader(
                         title = stringResource(R.string.section_recent_animes),
-                        accentLabel = "${feed.recentAdded.size}",
+                        accentLabel = "${distinctRecent.size}",
                         actionLabel = stringResource(R.string.home_see_all),
                         onActionClick = onOpenExplore
                     )
@@ -793,14 +1144,18 @@ private fun HomeFeedContent(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         itemsIndexed(
-                            items = feed.recentAdded,
+                            items = distinctRecent,
                             key = { _, anime -> "rec_${anime.provider.id}_${anime.slug}" }
                         ) { index, anime ->
                             val sharedKey = posterSharedKey(anime.provider.id, anime.slug)
                             val uniqueKey = if (
                                 sharedKey !in featuredKeys &&
                                 sharedKey !in favoriteKeys &&
-                                sharedKey !in airingKeys
+                                sharedKey !in todayScheduleKeys &&
+                                sharedKey !in airingKeys &&
+                                sharedKey !in moviesKeys &&
+                                sharedKey !in ovasKeys &&
+                                sharedKey !in completedKeys
                             ) {
                                 sharedKey
                             } else null
@@ -1123,12 +1478,16 @@ private fun FeaturedHeroCarousel(
 @Composable
 private fun PlaybackSettingsBottomSheet(
     preferences: UserPreferences,
+    cloudSyncState: CloudSyncState,
     activeProfile: UserProfile,
     selectedProvider: AnimeProvider,
     onToggleAutoPlayNext: (Boolean) -> Unit,
     onToggleAutoSkipOpening: (Boolean) -> Unit,
     onTogglePremiereAlerts: (Boolean) -> Unit,
     onSelectDeviceMode: (DeviceMode) -> Unit,
+    onSelectColorTheme: (AppColorTheme) -> Unit,
+    onToggleAmoledBlack: (Boolean) -> Unit,
+    onSyncCloudNow: () -> Unit,
     onOpenTvShortcuts: () -> Unit,
     onOpenProfileSwitcher: () -> Unit,
     onOpenConnectionConfig: () -> Unit,
@@ -1137,6 +1496,10 @@ private fun PlaybackSettingsBottomSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val haptics = LocalHapticFeedback.current
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+    var authBusy by remember { mutableStateOf(false) }
+    var authError by remember { mutableStateOf<String?>(null) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -1261,6 +1624,312 @@ private fun PlaybackSettingsBottomSheet(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(text = stringResource(R.string.tv_shortcuts_title))
+                    }
+                }
+            }
+
+            // Appearance: Pure Black AMOLED + Color Themes Card
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Palette,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_appearance_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.DarkMode,
+                                contentDescription = null,
+                                tint = if (preferences.amoledBlack) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = stringResource(R.string.settings_amoled_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_amoled_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = preferences.amoledBlack,
+                            onCheckedChange = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onToggleAmoledBlack(it)
+                            },
+                            modifier = Modifier.testTag("settings_amoled_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Text(
+                        text = stringResource(R.string.settings_color_theme_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(AppColorTheme.entries) { theme ->
+                            val selected = preferences.colorTheme == theme
+                            val primarySwatch = Color(theme.primaryHex)
+                            val secondarySwatch = Color(theme.secondaryHex)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onSelectColorTheme(theme)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    .testTag("settings_theme_${theme.name.lowercase()}")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.linearGradient(listOf(primarySwatch, secondarySwatch))
+                                        )
+                                        .border(
+                                            width = if (selected) 2.5.dp else 1.dp,
+                                            color = if (selected) Color.White else MaterialTheme.colorScheme.outlineVariant,
+                                            shape = CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (selected) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Check,
+                                            contentDescription = theme.label,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = theme.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) primarySwatch else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Cloud Backup & Sync Card
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (cloudSyncState.isSignedIn) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                    }
+                )
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = when {
+                                cloudSyncState.isSyncing -> Icons.Rounded.CloudSync
+                                cloudSyncState.isSignedIn -> Icons.Rounded.CloudDone
+                                else -> Icons.Rounded.CloudOff
+                            },
+                            contentDescription = null,
+                            tint = if (cloudSyncState.isSignedIn) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.cloud_sync_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    if (!cloudSyncState.isSignedIn) {
+                        Text(
+                            text = stringResource(R.string.cloud_sync_desc_signed_out),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (authError != null) {
+                            Text(
+                                text = authError.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                if (!authBusy) {
+                                    authBusy = true
+                                    authError = null
+                                    coroutineScope.launch {
+                                        when (val outcome = GoogleAuthUiHelper.signInInteractive(context, credentialManager)) {
+                                            is GoogleSignInOutcome.Success -> onSyncCloudNow()
+                                            is GoogleSignInOutcome.Error -> authError = outcome.message
+                                            GoogleSignInOutcome.Cancelled -> Unit
+                                        }
+                                        authBusy = false
+                                    }
+                                }
+                            },
+                            enabled = !authBusy,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 46.dp)
+                                .testTag("settings_cloud_signin_button")
+                        ) {
+                            if (authBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.AccountCircle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                            Text(text = stringResource(R.string.comments_signin_button))
+                        }
+                    } else {
+                        Text(
+                            text = cloudSyncState.userEmail.ifBlank { cloudSyncState.userName },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = when {
+                                cloudSyncState.isSyncing -> stringResource(R.string.cloud_sync_syncing)
+                                cloudSyncState.errorMessage != null -> cloudSyncState.errorMessage.orEmpty()
+                                else -> stringResource(
+                                    R.string.cloud_sync_synced_counts,
+                                    cloudSyncState.syncedFavoritesCount,
+                                    cloudSyncState.syncedHistoryCount
+                                )
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (cloudSyncState.errorMessage != null) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.secondary
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onSyncCloudNow()
+                                },
+                                enabled = !cloudSyncState.isSyncing,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 46.dp)
+                                    .testTag("settings_cloud_sync_now")
+                            ) {
+                                if (cloudSyncState.isSyncing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.White
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CloudSync,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.cloud_sync_now),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        GoogleAuthUiHelper.signOut(credentialManager)
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 46.dp)
+                                    .testTag("settings_cloud_signout")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.Logout,
+                                    contentDescription = stringResource(R.string.comments_signout_button),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

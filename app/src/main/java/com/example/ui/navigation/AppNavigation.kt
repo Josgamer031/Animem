@@ -609,6 +609,15 @@ private fun KitsuneMainShell(
                                             },
                                             onOpenSearch = { navigateTopLevel(ExploreRoute) },
                                             onOpenExplore = { navigateTopLevel(ExploreRoute) },
+                                            onOpenSchedule = { navigateTopLevel(ScheduleRoute) },
+                                            onOpenGenre = { genreSlug ->
+                                                vm.openGenreInExplore(genreSlug)
+                                                navigateTopLevel(ExploreRoute)
+                                            },
+                                            onOpenCategory = { status, type ->
+                                                vm.openCategoryInExplore(status, type)
+                                                navigateTopLevel(ExploreRoute)
+                                            },
                                             onUnlockCloudflare = openCloudflareUnlock,
                                             onShowTvShortcuts = { showTvShortcutsDialog = true },
                                             modifier = Modifier.statusBarsPadding()
@@ -704,6 +713,9 @@ private fun KitsuneMainShell(
                                                         episodeUrl = epUrl
                                                     )
                                                 )
+                                            },
+                                            onOpenAnime = { nextSlug, nextProviderId ->
+                                                navController.navigate(AnimeDetailRoute(nextSlug, nextProviderId))
                                             },
                                             onNavigateToGenreExplore = { navigateTopLevel(ExploreRoute) },
                                             onUnlockCloudflare = openCloudflareUnlock

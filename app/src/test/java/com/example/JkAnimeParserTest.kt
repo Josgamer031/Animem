@@ -689,4 +689,54 @@ class JkAnimeParserTest {
         assertEquals(true, decoded.premiereAlertsEnabled)
         assertEquals(listOf("jkanime:frieren:28", "latanime:dandadan:12"), decoded.notifiedPremiereKeys)
     }
+
+    @Test
+    fun parseHome_rejectsVerDetallesGenericAnchorTextInAiringSection() {
+        val html = """
+            <html><body>
+              <section>
+                <div class="section-title"><h4>Animes en emisión</h4></div>
+                <div class="row">
+                  <div class="side-row">
+                    <a href="https://jkanime.net/solo-leveling-arise/">Ver detalles</a>
+                  </div>
+                  <div class="side-row">
+                    <a href="https://jkanime.net/sakamoto-days/">Ver detalles</a>
+                    <h5>Sakamoto Days</h5>
+                  </div>
+                </div>
+              </section>
+            </body></html>
+        """.trimIndent()
+
+        val feed = JkAnimeParser.parseHome(html)
+        assertEquals(2, feed.airing.size)
+        assertEquals("Solo Leveling Arise", feed.airing[0].title)
+        assertEquals("Sakamoto Days", feed.airing[1].title)
+    }
+
+    @Test
+    fun parseAnimeDetail_sortsDescendingPageRangesAscending() {
+        val html = """
+            <html><body>
+              <div class="anime__details__title"><h3>One Piece</h3></div>
+              <div class="anime__pagination">
+                <a class="numbers" href="#pag3">25 - 36</a>
+                <a class="numbers" href="#pag2">13 - 24</a>
+                <a class="numbers" href="#pag1">1 - 12</a>
+              </div>
+              <a href="https://jkanime.net/one-piece/36/">Último episodio 36</a>
+            </body></html>
+        """.trimIndent()
+
+        val detail = JkAnimeParser.parseAnimeDetail("one-piece", html)
+        assertEquals(listOf(1, 2, 3), detail.pageRanges.map { it.page })
+    }
+
+    @Test
+    fun buildEpisodeCommentsKey_producesSafeFirestoreDocumentId() {
+        val key = com.example.model.buildEpisodeCommentsKey("jkanime", "solo-leveling/2", 14)
+        assertEquals("jkanime_solo-leveling_2_ep14", key)
+        assertTrue(key.matches(Regex("^[a-zA-Z0-9_\\-]+$")))
+    }
 }

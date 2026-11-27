@@ -1,0 +1,243 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string &&
+        id.size() >= 1 &&
+        id.size() <= 128 &&
+        id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidEpisodeComment(data, episodeKey) {
+      return data.userId is string &&
+        data.userId.size() >= 1 &&
+        data.userId.size() <= 128 &&
+        data.authorName is string &&
+        data.authorName.size() >= 1 &&
+        data.authorName.size() <= 60 &&
+        (!('authorAvatarUrl' in data) || (
+          data.authorAvatarUrl is string &&
+          data.authorAvatarUrl.size() <= 400
+        )) &&
+        (!('parentCommentId' in data) || isValidId(data.parentCommentId)) &&
+        (!('replyToCommentId' in data) || isValidId(data.replyToCommentId)) &&
+        (!('replyToAuthorName' in data) || (
+          data.replyToAuthorName is string &&
+          data.replyToAuthorName.size() >= 1 &&
+          data.replyToAuthorName.size() <= 60
+        )) &&
+        data.episodeKey is string &&
+        data.episodeKey == episodeKey &&
+        data.animeTitle is string &&
+        data.animeTitle.size() >= 1 &&
+        data.animeTitle.size() <= 140 &&
+        data.episodeNumber is int &&
+        data.episodeNumber >= 1 &&
+        data.episodeNumber <= 5000 &&
+        data.text is string &&
+        data.text.size() >= 1 &&
+        data.text.size() <= 500 &&
+        data.spoiler is bool &&
+        data.createdAt is timestamp &&
+        data.createdAt <= request.time &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    function isValidCloudFavorite(data, userId) {
+      return data.userId is string &&
+        data.userId == userId &&
+        data.animeSlug is string &&
+        data.animeSlug.size() >= 1 &&
+        data.animeSlug.size() <= 160 &&
+        data.animeTitle is string &&
+        data.animeTitle.size() >= 1 &&
+        data.animeTitle.size() <= 200 &&
+        (!('coverUrl' in data) || (data.coverUrl is string && data.coverUrl.size() <= 400)) &&
+        (!('type' in data) || (data.type is string && data.type.size() <= 40)) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 40)) &&
+        (!('totalEpisodesText' in data) || (data.totalEpisodesText is string && data.totalEpisodesText.size() <= 40)) &&
+        data.providerId is string &&
+        data.providerId in ['jkanime', 'latanime'] &&
+        data.profileId is string &&
+        data.profileId.size() >= 1 &&
+        data.profileId.size() <= 64 &&
+        data.watchStatus is string &&
+        data.watchStatus in ['WATCHING', 'PLAN_TO_WATCH', 'COMPLETED', 'DROPPED'] &&
+        data.addedAtMillis is int &&
+        data.addedAtMillis >= 0 &&
+        data.createdAt is timestamp &&
+        data.createdAt <= request.time &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    function isValidCloudHistory(data, userId) {
+      return data.userId is string &&
+        data.userId == userId &&
+        data.animeSlug is string &&
+        data.animeSlug.size() >= 1 &&
+        data.animeSlug.size() <= 160 &&
+        data.animeTitle is string &&
+        data.animeTitle.size() >= 1 &&
+        data.animeTitle.size() <= 200 &&
+        (!('coverUrl' in data) || (data.coverUrl is string && data.coverUrl.size() <= 400)) &&
+        (!('episodeUrl' in data) || (data.episodeUrl is string && data.episodeUrl.size() <= 400)) &&
+        data.episodeNumber is int &&
+        data.episodeNumber >= 1 &&
+        data.episodeNumber <= 5000 &&
+        data.positionMs is int &&
+        data.positionMs >= 0 &&
+        data.durationMs is int &&
+        data.durationMs >= 0 &&
+        data.updatedAtMillis is int &&
+        data.updatedAtMillis >= 0 &&
+        data.providerId is string &&
+        data.providerId in ['jkanime', 'latanime'] &&
+        data.profileId is string &&
+        data.profileId.size() >= 1 &&
+        data.profileId.size() <= 64 &&
+        data.createdAt is timestamp &&
+        data.createdAt <= request.time &&
+        data.updatedAt is timestamp &&
+        data.updatedAt <= request.time;
+    }
+
+    match /episodes/{episodeKey}/comments/{commentId} {
+      allow get: if isSignedIn() && isValidId(episodeKey) && isValidId(commentId);
+      allow list: if isSignedIn() && isValidId(episodeKey);
+
+      allow create: if isSignedIn() &&
+        isValidId(episodeKey) &&
+        isValidId(commentId) &&
+        incoming().keys().hasAll([
+          'userId', 'authorName', 'episodeKey', 'animeTitle',
+          'episodeNumber', 'text', 'spoiler', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'userId', 'authorName', 'authorAvatarUrl', 'episodeKey',
+          'animeTitle', 'episodeNumber', 'text', 'spoiler',
+          'parentCommentId', 'replyToCommentId', 'replyToAuthorName',
+          'createdAt', 'updatedAt'
+        ]) &&
+        incoming().userId == request.auth.uid &&
+        isValidEpisodeComment(incoming(), episodeKey);
+
+      allow update: if isSignedIn() &&
+        isValidId(episodeKey) &&
+        isValidId(commentId) &&
+        isValidEpisodeComment(incoming(), episodeKey) &&
+        existing().userId == request.auth.uid &&
+        incoming().userId == existing().userId &&
+        incoming().episodeKey == existing().episodeKey &&
+        incoming().episodeNumber == existing().episodeNumber &&
+        incoming().animeTitle == existing().animeTitle &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['text', 'spoiler', 'updatedAt']);
+
+      allow delete: if isSignedIn() &&
+        isValidId(episodeKey) &&
+        isValidId(commentId) &&
+        existing().userId == request.auth.uid;
+    }
+
+    match /users/{userId}/favorites/{favId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidId(favId);
+      allow list: if isSignedIn() && request.auth.uid == userId && isValidId(userId);
+
+      allow create: if isSignedIn() &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(favId) &&
+        incoming().keys().hasAll([
+          'userId', 'animeSlug', 'animeTitle', 'providerId',
+          'profileId', 'watchStatus', 'addedAtMillis', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'userId', 'animeSlug', 'animeTitle', 'coverUrl', 'type',
+          'status', 'totalEpisodesText', 'providerId', 'profileId',
+          'watchStatus', 'addedAtMillis', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidCloudFavorite(incoming(), userId);
+
+      allow update: if isSignedIn() &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(favId) &&
+        isValidCloudFavorite(incoming(), userId) &&
+        incoming().userId == existing().userId &&
+        incoming().animeSlug == existing().animeSlug &&
+        incoming().providerId == existing().providerId &&
+        incoming().profileId == existing().profileId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'animeTitle', 'coverUrl', 'type', 'status', 'totalEpisodesText',
+          'watchStatus', 'addedAtMillis', 'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(favId);
+    }
+
+    match /users/{userId}/history/{historyId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId) && isValidId(historyId);
+      allow list: if isSignedIn() && request.auth.uid == userId && isValidId(userId);
+
+      allow create: if isSignedIn() &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(historyId) &&
+        incoming().keys().hasAll([
+          'userId', 'animeSlug', 'animeTitle', 'episodeNumber',
+          'positionMs', 'durationMs', 'updatedAtMillis', 'providerId',
+          'profileId', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'userId', 'animeSlug', 'animeTitle', 'coverUrl',
+          'episodeNumber', 'positionMs', 'durationMs', 'updatedAtMillis',
+          'providerId', 'episodeUrl', 'profileId', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidCloudHistory(incoming(), userId);
+
+      allow update: if isSignedIn() &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(historyId) &&
+        isValidCloudHistory(incoming(), userId) &&
+        incoming().userId == existing().userId &&
+        incoming().animeSlug == existing().animeSlug &&
+        incoming().episodeNumber == existing().episodeNumber &&
+        incoming().providerId == existing().providerId &&
+        incoming().profileId == existing().profileId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'animeTitle', 'coverUrl', 'positionMs', 'durationMs',
+          'updatedAtMillis', 'episodeUrl', 'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() &&
+        request.auth.uid == userId &&
+        isValidId(userId) &&
+        isValidId(historyId);
+    }
+  }
+}

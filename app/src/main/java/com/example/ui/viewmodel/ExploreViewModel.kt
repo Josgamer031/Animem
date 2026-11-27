@@ -47,15 +47,15 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     private var suppressNextProviderEmission = false
 
     init {
-        val initialPending = repository.pendingExploreGenre.value
+        val initialPending = repository.pendingExploreFilter.value
         if (initialPending != null) {
             suppressNextProviderEmission = true
         }
         viewModelScope.launch {
             repository.selectedProvider
                 .collect { provider ->
-                    val pending = repository.pendingExploreGenre.value
-                    if (suppressNextProviderEmission || (pending != null && pending.first == provider)) {
+                    val pending = repository.pendingExploreFilter.value
+                    if (suppressNextProviderEmission || (pending != null && pending.provider == provider)) {
                         suppressNextProviderEmission = false
                         return@collect
                     }
@@ -72,26 +72,18 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
                 }
         }
         viewModelScope.launch {
-            repository.pendingExploreGenre.collect { pending ->
+            repository.pendingExploreFilter.collect { pending ->
                 if (pending != null) {
-                    val (provider, genreSlug) = pending
                     _uiState.update {
                         it.copy(
-                            filter = DirectoryFilter(
-                                provider = provider,
-                                query = "",
-                                status = "",
-                                type = "",
-                                genre = genreSlug,
-                                page = 1
-                            ),
+                            filter = pending.copy(query = "", page = 1),
                             items = emptyList(),
                             hasNextPage = false,
                             errorMessage = null,
                             blockedUrl = null
                         )
                     }
-                    repository.consumePendingExploreGenre()
+                    repository.consumePendingExploreFilter()
                     searchOrFilter(resetPage = true)
                 }
             }
@@ -142,16 +134,34 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     }
 
     fun selectStatus(status: String) {
-        if (_uiState.value.filter.provider == AnimeProvider.JKANIME) return
         val next = if (_uiState.value.filter.status == status) "" else status
-        _uiState.update { it.copy(filter = it.filter.copy(status = next)) }
+        _uiState.update {
+            val isJk = it.filter.provider == AnimeProvider.JKANIME
+            it.copy(
+                filter = it.filter.copy(
+                    status = next,
+                    type = if (isJk && next.isNotBlank()) "" else it.filter.type,
+                    genre = if (isJk && next.isNotBlank()) "" else it.filter.genre,
+                    query = if (isJk && next.isNotBlank()) "" else it.filter.query
+                )
+            )
+        }
         searchOrFilter(resetPage = true)
     }
 
     fun selectType(type: String) {
-        if (_uiState.value.filter.provider == AnimeProvider.JKANIME) return
         val next = if (_uiState.value.filter.type == type) "" else type
-        _uiState.update { it.copy(filter = it.filter.copy(type = next)) }
+        _uiState.update {
+            val isJk = it.filter.provider == AnimeProvider.JKANIME
+            it.copy(
+                filter = it.filter.copy(
+                    type = next,
+                    status = if (isJk && next.isNotBlank()) "" else it.filter.status,
+                    genre = if (isJk && next.isNotBlank()) "" else it.filter.genre,
+                    query = if (isJk && next.isNotBlank()) "" else it.filter.query
+                )
+            )
+        }
         searchOrFilter(resetPage = true)
     }
 
@@ -163,8 +173,8 @@ class ExploreViewModel(private val repository: JkAnimeRepository) : ViewModel() 
                 filter = it.filter.copy(
                     genre = next,
                     query = if (isJk && next.isNotBlank()) "" else it.filter.query,
-                    status = if (isJk) "" else it.filter.status,
-                    type = if (isJk) "" else it.filter.type
+                    status = if (isJk && next.isNotBlank()) "" else it.filter.status,
+                    type = if (isJk && next.isNotBlank()) "" else it.filter.type
                 )
             )
         }

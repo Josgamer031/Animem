@@ -62,6 +62,15 @@ data class HomeFeed(
     val provider: AnimeProvider = AnimeProvider.JKANIME
 )
 
+data class HomeSupplementarySections(
+    val todayDayLabel: String = "",
+    val todaySchedule: List<ScheduleItem> = emptyList(),
+    val movies: List<AnimeSummary> = emptyList(),
+    val ovas: List<AnimeSummary> = emptyList(),
+    val completed: List<AnimeSummary> = emptyList(),
+    val provider: AnimeProvider = AnimeProvider.JKANIME
+)
+
 data class EpisodeItem(
     val number: Int,
     val label: String,
@@ -272,6 +281,31 @@ enum class DeviceMode {
 }
 
 @Serializable
+enum class AppColorTheme(
+    val label: String,
+    val primaryHex: Long,
+    val secondaryHex: Long,
+    val tertiaryHex: Long
+) {
+    KITSUNE_RED("Carmesí", 0xFFFF3B5C, 0xFFFFB84D, 0xFF38BDF8),
+    SAKURA_PINK("Sakura", 0xFFFF4D9E, 0xFFC084FC, 0xFF38BDF8),
+    CYBER_CYAN("Cian", 0xFF06B6D4, 0xFF818CF8, 0xFFF472B6),
+    EMERALD_JADE("Esmeralda", 0xFF10B981, 0xFFFBBF24, 0xFF38BDF8),
+    SOLAR_GOLD("Solar", 0xFFF59E0B, 0xFFFF4D6D, 0xFF2DD4BF)
+}
+
+data class CloudSyncState(
+    val isSignedIn: Boolean = false,
+    val userEmail: String = "",
+    val userName: String = "",
+    val isSyncing: Boolean = false,
+    val lastSyncedAtMillis: Long = 0L,
+    val syncedFavoritesCount: Int = 0,
+    val syncedHistoryCount: Int = 0,
+    val errorMessage: String? = null
+)
+
+@Serializable
 data class UserPreferences(
     val autoPlayNext: Boolean = true,
     val autoSkipOpening: Boolean = false,
@@ -279,8 +313,11 @@ data class UserPreferences(
     val deviceMode: DeviceMode = DeviceMode.PHONE,
     val hasSelectedDeviceMode: Boolean = false,
     val premiereAlertsEnabled: Boolean = false,
-    val notifiedPremiereKeys: List<String> = emptyList()
+    val notifiedPremiereKeys: List<String> = emptyList(),
+    val colorTheme: AppColorTheme = AppColorTheme.KITSUNE_RED,
+    val amoledBlack: Boolean = false
 )
+
 
 
 

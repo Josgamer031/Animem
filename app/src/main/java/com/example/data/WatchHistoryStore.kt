@@ -74,6 +74,30 @@ class WatchHistoryStore(private val context: Context) {
         }
     }
 
+    suspend fun mergeFromCloud(cloudEntries: List<WatchHistoryEntry>) {
+        if (cloudEntries.isEmpty()) return
+        context.watchHistoryDataStore.edit { prefs ->
+            val current = prefs[historyKey]?.let { raw ->
+                try {
+                    json.decodeFromString<List<WatchHistoryEntry>>(raw)
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+            } ?: emptyList()
+
+            val mergedMap = LinkedHashMap<String, WatchHistoryEntry>()
+            (current + cloudEntries).forEach { entry ->
+                val key = "${entry.profileId}|${entry.providerId}|${entry.animeSlug}|${entry.episodeNumber}"
+                val prev = mergedMap[key]
+                if (prev == null || entry.updatedAtMillis >= prev.updatedAtMillis) {
+                    mergedMap[key] = entry
+                }
+            }
+            val sorted = mergedMap.values.sortedByDescending { it.updatedAtMillis }.take(300)
+            prefs[historyKey] = json.encodeToString(sorted)
+        }
+    }
+
     suspend fun clearProfile(profileId: String) {
         context.watchHistoryDataStore.edit { prefs ->
             val current = prefs[historyKey]?.let { raw ->

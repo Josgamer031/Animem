@@ -132,16 +132,11 @@ fun ExploreScreen(
     val haptics = LocalHapticFeedback.current
     var filtersExpanded by rememberSaveable { mutableStateOf(true) }
 
-    val isJkAnime = state.filter.provider == AnimeProvider.JKANIME
-    val activeFilterCount = if (isJkAnime) {
-        listOf(state.filter.genre).count { it.isNotBlank() }
-    } else {
-        listOf(
-            state.filter.status,
-            state.filter.type,
-            state.filter.genre
-        ).count { it.isNotBlank() }
-    }
+    val activeFilterCount = listOf(
+        state.filter.status,
+        state.filter.type,
+        state.filter.genre
+    ).count { it.isNotBlank() }
 
     val hasActiveFilters = activeFilterCount > 0 || state.filter.query.isNotBlank()
 
@@ -425,83 +420,6 @@ fun ExploreScreen(
                         .padding(vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (!isJkAnime) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "ESTADO Y FORMATO",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (hasActiveFilters) {
-                                TextButton(
-                                    onClick = viewModel::clearAllFilters,
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.testTag("explore_clear_filters")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Clear,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = stringResource(R.string.clear_filters),
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
-                                }
-                            }
-                        }
-
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(STATUS_OPTIONS) { (key, label) ->
-                                val selected = state.filter.status == key
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = { viewModel.selectStatus(key) },
-                                    label = {
-                                        Text(
-                                            text = label,
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                                    ),
-                                    modifier = Modifier.testTag("filter_status_$key")
-                                )
-                            }
-                            items(TYPE_OPTIONS) { (key, label) ->
-                                val selected = state.filter.type == key
-                                FilterChip(
-                                    selected = selected,
-                                    onClick = { viewModel.selectType(key) },
-                                    label = {
-                                        Text(
-                                            text = label,
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                        )
-                                    },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.secondary,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondary
-                                    ),
-                                    modifier = Modifier.testTag("filter_type_$key")
-                                )
-                            }
-                        }
-                    }
-
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -510,12 +428,12 @@ fun ExploreScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "GÉNEROS",
+                            text = "ESTADO Y FORMATO",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        if (isJkAnime && hasActiveFilters) {
+                        if (hasActiveFilters) {
                             TextButton(
                                 onClick = viewModel::clearAllFilters,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -533,6 +451,63 @@ fun ExploreScreen(
                                 )
                             }
                         }
+                    }
+
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(STATUS_OPTIONS) { (key, label) ->
+                            val selected = state.filter.status == key
+                            FilterChip(
+                                selected = selected,
+                                onClick = { viewModel.selectStatus(key) },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.testTag("filter_status_$key")
+                            )
+                        }
+                        items(TYPE_OPTIONS) { (key, label) ->
+                            val selected = state.filter.type == key
+                            FilterChip(
+                                selected = selected,
+                                onClick = { viewModel.selectType(key) },
+                                label = {
+                                    Text(
+                                        text = label,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.secondary,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSecondary
+                                ),
+                                modifier = Modifier.testTag("filter_type_$key")
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "GÉNEROS",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     LazyRow(
@@ -565,10 +540,8 @@ fun ExploreScreen(
         // Results Summary Bar
         if (!state.isLoading && state.items.isNotEmpty()) {
             val activeSummary = buildList {
-                if (!isJkAnime) {
-                    STATUS_OPTIONS.firstOrNull { it.first == state.filter.status }?.second?.let(::add)
-                    TYPE_OPTIONS.firstOrNull { it.first == state.filter.type }?.second?.let(::add)
-                }
+                STATUS_OPTIONS.firstOrNull { it.first == state.filter.status }?.second?.let(::add)
+                TYPE_OPTIONS.firstOrNull { it.first == state.filter.type }?.second?.let(::add)
                 GENRE_OPTIONS.firstOrNull { it.first == state.filter.genre }?.second?.let(::add)
             }.joinToString(" · ")
 

@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -110,12 +111,17 @@ import coil.compose.AsyncImage
 import com.example.R
 import com.example.model.AnimeDetail
 import com.example.model.AnimeProvider
+import com.example.model.AnimeSummary
 import com.example.model.EpisodeItem
 import com.example.model.WatchHistoryEntry
 import com.example.model.WatchStatus
+import com.example.notifications.DeepLinkIntentHelper
 import com.example.ui.components.AnimeDetailLoadingSkeleton
+import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.CoverPalette
+import com.example.ui.components.EpisodeCommentsSheet
 import com.example.ui.components.ErrorStateView
+import com.example.ui.components.SectionHeader
 import com.example.ui.components.StaggeredReveal
 import com.example.ui.components.kitsuneSharedPoster
 import com.example.ui.components.posterSharedKey
@@ -131,6 +137,7 @@ fun AnimeDetailScreen(
     viewModel: AnimeDetailViewModel,
     onBack: () -> Unit,
     onPlayEpisode: (slug: String, episode: Int, title: String, coverUrl: String, providerId: String, episodeUrl: String) -> Unit,
+    onOpenAnime: (slug: String, providerId: String) -> Unit,
     onNavigateToGenreExplore: () -> Unit,
     onUnlockCloudflare: (targetUrl: String, onUnlocked: () -> Unit) -> Unit
 ) {
@@ -142,11 +149,22 @@ fun AnimeDetailScreen(
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
     val listState = rememberLazyListState()
+    var commentsEpisodeNumber by rememberSaveable { mutableStateOf<Int?>(null) }
     val successDetail = (uiState as? AnimeDetailUiState.Success)?.detail
     val coverPalette = rememberCoverPalette(
         imageUrl = successDetail?.coverUrl,
         fallbackAccent = MaterialTheme.colorScheme.primary
     )
+
+    if (commentsEpisodeNumber != null && successDetail != null) {
+        EpisodeCommentsSheet(
+            providerId = successDetail.provider.id,
+            slug = successDetail.slug,
+            animeTitle = successDetail.title,
+            episodeNumber = commentsEpisodeNumber ?: 1,
+            onDismiss = { commentsEpisodeNumber = null }
+        )
+    }
 
     val topBarScrolled by remember {
         derivedStateOf {
@@ -231,11 +249,13 @@ fun AnimeDetailScreen(
                         coverPalette = coverPalette,
                         listState = listState,
                         episodes = state.displayedEpisodes,
-                        episodeQuery = episodeQuery,
                         selectedPage = state.selectedPage,
+                        episodeQuery = episodeQuery,
                         isLoadingEpisodes = state.isLoadingEpisodes,
                         isLoadingMoreEpisodes = state.isLoadingMoreEpisodes,
                         sortDescending = state.sortDescending,
+                        similarAnimes = state.similarAnimes,
+                        isLoadingSimilar = state.isLoadingSimilar,
                         isFavorite = isFavorite,
                         favoriteStatus = favoriteStatus,
                         watchedMap = watchedMap,
@@ -255,6 +275,13 @@ fun AnimeDetailScreen(
                             onNavigateToGenreExplore()
                         },
                         onRetryEpisodes = viewModel::loadDetail,
+                        onOpenSimilarAnime = { simSlug, simProviderId ->
+                            onOpenAnime(simSlug, simProviderId)
+                        },
+                        onOpenComments = { epNum ->
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            commentsEpisodeNumber = epNum
+                        },
                         onPlayEpisode = { epNum ->
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             val epUrl = state.detail.episodes.firstOrNull { it.number == epNum }?.url.orEmpty()
@@ -367,16 +394,17 @@ fun AnimeDetailScreen(
                             ) {
                                 IconButton(
                                     onClick = {
-                                        val shareUrl = "${successDetail.provider.baseUrl}/${successDetail.slug}/"
+                                        val shareText = DeepLinkIntentHelper.buildAnimeShareText(
+                                            title = successDetail.title,
+                                            slug = successDetail.slug,
+                                            provider = successDetail.provider
+                                        )
                                         val intent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
-                                            putExtra(
-                                                Intent.EXTRA_TEXT,
-                                                "Mira ${successDetail.title} en ${successDetail.provider.displayName}: $shareUrl"
-                                            )
+                                            putExtra(Intent.EXTRA_TEXT, shareText)
                                         }
                                         context.startActivity(
-                                            Intent.createChooser(intent, "Compartir anime")
+                                            Intent.createChooser(intent, context.getString(R.string.share_anime_chooser))
                                         )
                                     },
                                     modifier = Modifier.testTag("detail_share_button")
@@ -409,11 +437,13 @@ private fun AnimeDetailContent(
     coverPalette: CoverPalette,
     listState: LazyListState,
     episodes: List<EpisodeItem>,
-    episodeQuery: String,
     selectedPage: Int,
+    episodeQuery: String,
     isLoadingEpisodes: Boolean,
     isLoadingMoreEpisodes: Boolean,
     sortDescending: Boolean,
+    similarAnimes: List<AnimeSummary>,
+    isLoadingSimilar: Boolean,
     isFavorite: Boolean,
     favoriteStatus: WatchStatus?,
     watchedMap: Map<Int, WatchHistoryEntry>,
@@ -424,6 +454,8 @@ private fun AnimeDetailContent(
     onSelectWatchStatus: (WatchStatus) -> Unit,
     onGenreClick: (String) -> Unit,
     onRetryEpisodes: () -> Unit,
+    onOpenSimilarAnime: (slug: String, providerId: String) -> Unit,
+    onOpenComments: (Int) -> Unit,
     onPlayEpisode: (Int) -> Unit
 ) {
     var synopsisExpanded by remember { mutableStateOf(false) }
@@ -1093,11 +1125,66 @@ private fun AnimeDetailContent(
                         watchedEntry = watchedEntry,
                         isLatestWatched = latestWatched?.episodeNumber == ep.number,
                         accentColor = coverPalette.vibrant,
+                        onOpenComments = { onOpenComments(ep.number) },
                         onClick = { onPlayEpisode(ep.number) },
                         modifier = Modifier
                             .padding(horizontal = 16.dp, vertical = 5.dp)
                             .animateItem()
                     )
+                }
+            }
+        }
+
+        if (isLoadingSimilar || similarAnimes.isNotEmpty()) {
+            item(key = "similar_animes_section") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 22.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SectionHeader(
+                        title = stringResource(R.string.section_similar_animes),
+                        accentLabel = if (similarAnimes.isNotEmpty()) "${similarAnimes.size}" else ""
+                    )
+                    if (isLoadingSimilar && similarAnimes.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp,
+                                color = coverPalette.vibrant
+                            )
+                        }
+                    } else {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.testTag("detail_similar_animes_row")
+                        ) {
+                            itemsIndexed(
+                                items = similarAnimes,
+                                key = { _, sim -> "sim_${sim.provider.id}_${sim.slug}" }
+                            ) { index, sim ->
+                                StaggeredReveal(index = index, maxStaggerItems = 5) {
+                                    AnimePosterCard(
+                                        title = sim.title,
+                                        coverUrl = sim.coverUrl,
+                                        badge = sim.type.ifBlank { sim.provider.badgeText },
+                                        subtitle = sim.episodeBadge.ifBlank { sim.status },
+                                        sharedElementKey = null,
+                                        onClick = { onOpenSimilarAnime(sim.slug, sim.provider.id) },
+                                        modifier = Modifier.width(136.dp),
+                                        testTag = "similar_anime_card_${sim.slug}"
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1219,6 +1306,7 @@ private fun EpisodeRowItem(
     watchedEntry: WatchHistoryEntry?,
     isLatestWatched: Boolean,
     accentColor: Color,
+    onOpenComments: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1338,6 +1426,20 @@ private fun EpisodeRowItem(
                         )
                     }
                 }
+            }
+
+            IconButton(
+                onClick = onOpenComments,
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("episode_comments_${episode.number}")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Forum,
+                    contentDescription = "${stringResource(R.string.comments_title)} Ep. ${episode.number}",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }

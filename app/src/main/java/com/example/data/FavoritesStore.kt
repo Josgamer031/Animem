@@ -81,6 +81,24 @@ class FavoritesStore(private val context: Context) {
         }
     }
 
+    suspend fun mergeFromCloud(cloudEntries: List<FavoriteAnime>) {
+        if (cloudEntries.isEmpty()) return
+        context.favoritesDataStore.edit { prefs ->
+            val current = decode(prefs[favoritesKey])
+            val mergedMap = LinkedHashMap<String, FavoriteAnime>()
+            (current + cloudEntries).forEach { item ->
+                val key = "${item.profileId}|${item.providerId}|${item.animeSlug}"
+                val prev = mergedMap[key]
+                if (prev == null || item.addedAtMillis >= prev.addedAtMillis) {
+                    mergedMap[key] = item
+                }
+            }
+            prefs[favoritesKey] = json.encodeToString(
+                mergedMap.values.sortedByDescending { it.addedAtMillis }
+            )
+        }
+    }
+
     suspend fun clearProfile(profileId: String) {
         context.favoritesDataStore.edit { prefs ->
             val current = decode(prefs[favoritesKey])

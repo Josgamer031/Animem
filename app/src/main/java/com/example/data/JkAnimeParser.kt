@@ -34,6 +34,23 @@ object JkAnimeParser {
         "politica-de-privacidad", "dmca", "contacto", "user", "ajax", "cdn-cgi"
     )
 
+    private val GENERIC_ACTION_LABELS = setOf(
+        "ver", "ver detalles", "ver detalle", "detalles", "detalle",
+        "ver anime", "ver más", "ver mas", "ver todo", "inicio", "directorio",
+        "ver capítulo", "ver capitulo", "ver episodio", "ver ahora", "leer más", "leer mas"
+    )
+
+    private fun isGenericActionLabel(raw: String): Boolean {
+        val clean = raw.trim().lowercase().replace(Regex("""\s+"""), " ")
+        return clean.length <= 1 || clean in GENERIC_ACTION_LABELS
+    }
+
+    private fun formatSlugTitle(slug: String): String =
+        slug.split('-', '_')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part -> part.replaceFirstChar { it.uppercase() } }
+            .ifBlank { slug }
+
     fun parseHome(html: String): HomeFeed {
         val doc = Jsoup.parse(html, BASE_URL)
 
@@ -199,8 +216,16 @@ object JkAnimeParser {
                 val existingIdx = targetList.indexOfFirst { it.slug == item.slug }
                 if (existingIdx == -1) {
                     targetList.add(item)
-                } else if (targetList[existingIdx].coverUrl.isBlank() && item.coverUrl.isNotBlank()) {
-                    targetList[existingIdx] = targetList[existingIdx].copy(coverUrl = item.coverUrl)
+                } else {
+                    val current = targetList[existingIdx]
+                    val currentLooksFallback = isGenericActionLabel(current.title) ||
+                        current.title == formatSlugTitle(current.slug)
+                    val newIsRichTitle = !isGenericActionLabel(item.title) &&
+                        item.title != formatSlugTitle(item.slug)
+                    targetList[existingIdx] = current.copy(
+                        title = if (currentLooksFallback && newIsRichTitle) item.title else current.title,
+                        coverUrl = current.coverUrl.ifBlank { item.coverUrl }
+                    )
                 }
             }
         }
@@ -357,36 +382,53 @@ object JkAnimeParser {
             }
         }
 
-        // Cross-enrich missing cover images across all Home sections by animeSlug
+        // Cross-enrich missing cover images and fallback titles across all Home sections by animeSlug
+        val richTitleBySlug = buildMap {
+            (featured + recentAdded + airing).forEach { item ->
+                if (!isGenericActionLabel(item.title) && item.title != formatSlugTitle(item.slug)) {
+                    putIfAbsent(item.slug, item.title)
+                }
+            }
+            latestEpisodes.forEach { ep ->
+                if (!isGenericActionLabel(ep.animeTitle) && ep.animeTitle != formatSlugTitle(ep.animeSlug)) {
+                    putIfAbsent(ep.animeSlug, ep.animeTitle)
+                }
+            }
+        }
         val coverBySlug = buildMap {
             featured.forEach { if (it.coverUrl.isNotBlank()) put(it.slug, it.coverUrl) }
             airing.forEach { if (it.coverUrl.isNotBlank()) putIfAbsent(it.slug, it.coverUrl) }
             recentAdded.forEach { if (it.coverUrl.isNotBlank()) putIfAbsent(it.slug, it.coverUrl) }
             latestEpisodes.forEach { if (it.coverUrl.isNotBlank()) putIfAbsent(it.animeSlug, it.coverUrl) }
         }
+        val enrichedFeatured = featured.map { item ->
+            val resolvedTitle = if (isGenericActionLabel(item.title) || item.title == formatSlugTitle(item.slug)) {
+                richTitleBySlug[item.slug] ?: item.title
+            } else item.title
+            val resolvedCover = item.coverUrl.ifBlank { coverBySlug[item.slug].orEmpty() }
+            item.copy(title = resolvedTitle, coverUrl = resolvedCover)
+        }
         val enrichedEpisodes = latestEpisodes.map { ep ->
-            if (ep.coverUrl.isBlank()) {
-                val matchCover = coverBySlug[ep.animeSlug].orEmpty()
-                if (matchCover.isNotBlank()) ep.copy(coverUrl = matchCover) else ep
-            } else {
-                ep
-            }
+            val resolvedCover = ep.coverUrl.ifBlank { coverBySlug[ep.animeSlug].orEmpty() }
+            if (resolvedCover != ep.coverUrl) ep.copy(coverUrl = resolvedCover) else ep
         }
         val enrichedAiring = airing.map { item ->
-            if (item.coverUrl.isBlank()) {
-                val matchCover = coverBySlug[item.slug].orEmpty()
-                if (matchCover.isNotBlank()) item.copy(coverUrl = matchCover) else item
-            } else item
+            val resolvedTitle = if (isGenericActionLabel(item.title) || item.title == formatSlugTitle(item.slug)) {
+                richTitleBySlug[item.slug] ?: item.title
+            } else item.title
+            val resolvedCover = item.coverUrl.ifBlank { coverBySlug[item.slug].orEmpty() }
+            item.copy(title = resolvedTitle, coverUrl = resolvedCover)
         }
         val enrichedRecent = recentAdded.map { item ->
-            if (item.coverUrl.isBlank()) {
-                val matchCover = coverBySlug[item.slug].orEmpty()
-                if (matchCover.isNotBlank()) item.copy(coverUrl = matchCover) else item
-            } else item
+            val resolvedTitle = if (isGenericActionLabel(item.title) || item.title == formatSlugTitle(item.slug)) {
+                richTitleBySlug[item.slug] ?: item.title
+            } else item.title
+            val resolvedCover = item.coverUrl.ifBlank { coverBySlug[item.slug].orEmpty() }
+            item.copy(title = resolvedTitle, coverUrl = resolvedCover)
         }
 
         return HomeFeed(
-            featured = featured.take(8),
+            featured = enrichedFeatured.take(8),
             latestEpisodes = enrichedEpisodes.take(30),
             airing = enrichedAiring.take(18),
             recentAdded = enrichedRecent.take(24)
@@ -483,19 +525,15 @@ object JkAnimeParser {
                 val cover = extractImageUrl(a).ifBlank {
                     container?.let { extractImageUrl(it) }.orEmpty()
                 }
-                val title = a.selectFirst("h5, h4, h3, .title, .card-title, span")?.text()?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: a.attr("title").trim().takeIf { it.isNotBlank() }
-                    ?: container?.selectFirst("h5, h4, h3, .title, .card-title")?.text()?.trim()
-                        ?.takeIf { it.isNotBlank() }
-                    ?: a.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.length > 1 }
-                    ?: a.text().trim().takeIf {
-                        it.length > 1 &&
-                            !it.equals("Ver", true) &&
-                            !it.equals("Inicio", true) &&
-                            !it.equals("Directorio", true)
-                    }
-                    ?: ""
+                val title = a.selectFirst("h5, h4, h3, h6, .title, .card-title, span")?.text()?.trim()
+                    ?.takeIf { !isGenericActionLabel(it) }
+                    ?: a.attr("title").trim().takeIf { !isGenericActionLabel(it) }
+                    ?: container?.selectFirst("h5, h4, h3, h6, .title, .card-title, strong")?.text()?.trim()
+                        ?.takeIf { !isGenericActionLabel(it) }
+                    ?: a.selectFirst("img")?.attr("alt")?.trim()?.takeIf { !isGenericActionLabel(it) }
+                    ?: container?.selectFirst("img")?.attr("alt")?.trim()?.takeIf { !isGenericActionLabel(it) }
+                    ?: a.text().trim().takeIf { !isGenericActionLabel(it) }
+                    ?: formatSlugTitle(slug)
                 if (title.isNotBlank()) {
                     val idx = items.indexOfFirst { it.slug == slug }
                     if (idx == -1) {
@@ -779,9 +817,13 @@ object JkAnimeParser {
                 val onclickPage = Regex("""(?:pagination|paginacion|loadEpisodes)\w*\([^)]*?\b(\d+)\s*['"]?\s*\)""")
                     .find(a.attr("onclick"))?.groupValues?.getOrNull(1)?.toIntOrNull()
                 val dataPage = a.attr("data-page").ifBlank { a.attr("data-pag") }.toIntOrNull()
-                val rangeStartPage = Regex("""^(\d+)\s*[-–]\s*\d+$""").find(label)
-                    ?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?.let { ((it - 1).coerceAtLeast(0) / 12) + 1 }
+                val rangeStartPage = Regex("""^(\d+)\s*[-–]\s*(\d+)$""").find(label)
+                    ?.let { m ->
+                        val aNum = m.groupValues[1].toIntOrNull()
+                        val bNum = m.groupValues[2].toIntOrNull()
+                        val low = if (aNum != null && bNum != null) minOf(aNum, bNum) else aNum
+                        low?.let { ((it - 1).coerceAtLeast(0) / 12) + 1 }
+                    }
                 val pageNum = hrefPage ?: onclickPage ?: dataPage ?: rangeStartPage ?: label.toIntOrNull() ?: sequentialIdx++
                 if (pageRanges.none { it.page == pageNum }) {
                     pageRanges.add(EpisodePageRange(page = pageNum, label = label))
@@ -814,7 +856,7 @@ object JkAnimeParser {
             totalEpisodesText = totalEpisodesText,
             genres = genres,
             episodes = mergedDirect.values.sortedBy { it.number },
-            pageRanges = pageRanges
+            pageRanges = pageRanges.sortedBy { it.page }
         )
     }
 
@@ -1113,14 +1155,17 @@ object JkAnimeParser {
         val enclosingCard = if (el.tagName() == "a") findSingleAnimeParent(el, slug) else null
         val scope = enclosingCard ?: el
 
-        val title = scope.selectFirst("h5 a, h5, h4, h3, .anime__item__text h5, .title, .card-title")
-            ?.text()?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: anchor.attr("title").trim().takeIf { it.isNotBlank() }
-            ?: scope.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.length > 1 }
-            ?: anchors.mapNotNull { it.text().trim().takeIf { t -> t.length > 1 && !t.equals("Ver", true) } }
+        val title = scope.select("h5 a, h5, h4, h3, h6, .anime__item__text h5, .anime__item__text a, .title, .card-title, .name, strong")
+            .map { it.text().trim() }
+            .firstOrNull { !isGenericActionLabel(it) }
+            ?: anchors.mapNotNull { it.attr("title").trim().takeIf { t -> !isGenericActionLabel(t) } }
                 .firstOrNull()
-            ?: return null
+            ?: scope.attr("title").trim().takeIf { !isGenericActionLabel(it) }
+            ?: scope.select("img").mapNotNull { it.attr("alt").trim().takeIf { t -> !isGenericActionLabel(t) } }
+                .firstOrNull()
+            ?: anchors.mapNotNull { it.text().trim().takeIf { t -> !isGenericActionLabel(t) } }
+                .firstOrNull()
+            ?: formatSlugTitle(slug)
 
         val coverUrl = extractImageUrl(el).ifBlank {
             enclosingCard?.let { extractImageUrl(it) }.orEmpty()
@@ -1151,7 +1196,9 @@ object JkAnimeParser {
                 }
             }
         }
-        val snippet = scope.selectFirst("p")?.text()?.trim().orEmpty()
+        val snippet = scope.selectFirst("p")?.text()?.trim()
+            ?.takeIf { !isGenericActionLabel(it) }
+            .orEmpty()
 
         return AnimeSummary(
             slug = slug,
@@ -1167,17 +1214,26 @@ object JkAnimeParser {
 
     private fun findSingleAnimeParent(anchor: Element, targetSlug: String): Element? {
         var cur: Element? = anchor.parent()
-        repeat(3) {
-            val candidate = cur ?: return null
+        var headingFallback: Element? = null
+        repeat(4) {
+            val candidate = cur ?: return headingFallback
             val slugsInside = candidate.select("a[href]")
                 .mapNotNull { extractSlugFromAnimeUrl(normalizeUrl(it.attr("href"))) }
                 .distinct()
-            if (slugsInside.size == 1 && slugsInside.first() == targetSlug && extractImageUrl(candidate).isNotBlank()) {
-                return candidate
+            if (slugsInside.size == 1 && slugsInside.first() == targetSlug) {
+                if (extractImageUrl(candidate).isNotBlank()) {
+                    return candidate
+                }
+                if (headingFallback == null &&
+                    candidate.select("h1, h2, h3, h4, h5, h6, .title, .card-title, .anime__item__text, strong")
+                        .any { !isGenericActionLabel(it.text()) }
+                ) {
+                    headingFallback = candidate
+                }
             }
             cur = candidate.parent()
         }
-        return null
+        return headingFallback
     }
 
     private fun extractSlugFromAnimeUrl(url: String): String? {
@@ -1316,12 +1372,14 @@ object JkAnimeParser {
                 val href = normalizeUrl(anchor.attr("href"))
                 val slug = extractSlugFromAnimeUrl(href) ?: return@forEach
                 val scope = if (el.tagName() == "a") findSingleAnimeParent(el, slug) ?: el.parent() ?: el else el
-                val title = scope.selectFirst("h5, h4, h3, .title, .card-title, span.title, p")
-                    ?.text()?.trim()?.takeIf { it.length > 1 }
-                    ?: anchor.attr("title").trim().takeIf { it.length > 1 }
-                    ?: scope.selectFirst("img")?.attr("alt")?.trim()?.takeIf { it.length > 1 }
-                    ?: anchor.text().trim().takeIf { it.length > 1 && !it.equals("Ver", true) }
-                    ?: return@forEach
+                val title = scope.select("h5, h4, h3, h6, .title, .card-title, span.title, p, strong")
+                    .map { it.text().trim() }
+                    .firstOrNull { !isGenericActionLabel(it) }
+                    ?: anchor.attr("title").trim().takeIf { !isGenericActionLabel(it) }
+                    ?: scope.select("img").mapNotNull { it.attr("alt").trim().takeIf { t -> !isGenericActionLabel(t) } }
+                        .firstOrNull()
+                    ?: anchor.text().trim().takeIf { !isGenericActionLabel(it) }
+                    ?: formatSlugTitle(slug)
                 val cover = extractImageUrl(scope).ifBlank { extractImageUrl(anchor) }
                 val timeText = scope.selectFirst(".hora, .time, .badge, span.ep, time")
                     ?.text()?.trim()

@@ -1,0 +1,160 @@
+{
+  "entities": {
+    "EpisodeComment": {
+      "title": "EpisodeComment",
+      "description": "A user comment or threaded reply posted on a specific anime episode.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the authenticated Google user who authored the comment."
+        },
+        "authorName": {
+          "type": "string",
+          "description": "Public display name of the author (no email or PII)."
+        },
+        "authorAvatarUrl": {
+          "type": "string",
+          "description": "Optional public profile photo URL."
+        },
+        "episodeKey": {
+          "type": "string",
+          "description": "Normalized episode identifier: provider_slug_episodeNumber."
+        },
+        "animeTitle": {
+          "type": "string",
+          "description": "Title of the anime."
+        },
+        "episodeNumber": {
+          "type": "integer",
+          "description": "Episode number (1..5000)."
+        },
+        "text": {
+          "type": "string",
+          "description": "Comment body text (1..500 chars), may include @mentions."
+        },
+        "spoiler": {
+          "type": "boolean",
+          "description": "Whether the comment is flagged as containing spoilers."
+        },
+        "parentCommentId": {
+          "type": "string",
+          "description": "Optional root comment ID when this entry is a threaded reply."
+        },
+        "replyToCommentId": {
+          "type": "string",
+          "description": "Optional specific comment ID being replied to inside the thread."
+        },
+        "replyToAuthorName": {
+          "type": "string",
+          "description": "Optional display name of the author being replied to."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-generated creation timestamp via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-generated last update timestamp via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "authorName",
+        "episodeKey",
+        "animeTitle",
+        "episodeNumber",
+        "text",
+        "spoiler",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudFavorite": {
+      "title": "CloudFavorite",
+      "description": "Synced user favorite / Mi Lista entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "animeSlug": { "type": "string" },
+        "animeTitle": { "type": "string" },
+        "coverUrl": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "totalEpisodesText": { "type": "string" },
+        "providerId": { "type": "string" },
+        "profileId": { "type": "string" },
+        "watchStatus": { "type": "string" },
+        "addedAtMillis": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "animeSlug",
+        "animeTitle",
+        "providerId",
+        "profileId",
+        "watchStatus",
+        "addedAtMillis",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudHistoryEntry": {
+      "title": "CloudHistoryEntry",
+      "description": "Synced user watch progress history entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "animeSlug": { "type": "string" },
+        "animeTitle": { "type": "string" },
+        "coverUrl": { "type": "string" },
+        "episodeNumber": { "type": "integer" },
+        "positionMs": { "type": "integer" },
+        "durationMs": { "type": "integer" },
+        "updatedAtMillis": { "type": "integer" },
+        "providerId": { "type": "string" },
+        "episodeUrl": { "type": "string" },
+        "profileId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "animeSlug",
+        "animeTitle",
+        "episodeNumber",
+        "positionMs",
+        "durationMs",
+        "updatedAtMillis",
+        "providerId",
+        "profileId",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/episodes/{episodeKey}/comments/{commentId}": {
+      "schema": {
+        "$ref": "#/entities/EpisodeComment"
+      },
+      "description": "Community comments and threaded replies scoped under each episode document key."
+    },
+    "/users/{userId}/favorites/{favId}": {
+      "schema": {
+        "$ref": "#/entities/CloudFavorite"
+      },
+      "description": "Per-user synced Mi Lista favorites."
+    },
+    "/users/{userId}/history/{historyId}": {
+      "schema": {
+        "$ref": "#/entities/CloudHistoryEntry"
+      },
+      "description": "Per-user synced episode playback history."
+    }
+  }
+}

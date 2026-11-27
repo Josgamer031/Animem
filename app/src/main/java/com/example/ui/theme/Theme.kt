@@ -2,6 +2,7 @@ package com.example.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
@@ -10,29 +11,45 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.example.model.AppColorTheme
 
-private val DarkColorScheme = darkColorScheme(
-    primary = CrimsonPrimary,
-    onPrimary = Color.White,
-    primaryContainer = CrimsonContainer,
-    onPrimaryContainer = OnCrimsonContainer,
-    secondary = AmberGold,
-    onSecondary = Color(0xFF1F1400),
-    secondaryContainer = AmberContainer,
-    onSecondaryContainer = OnAmberContainer,
-    tertiary = TealAccent,
-    onTertiary = Color(0xFF001E2E),
-    background = ObsidianBg,
-    onBackground = CoolWhite,
-    surface = SlateSurface,
-    onSurface = CoolWhite,
-    surfaceVariant = SlateElevated,
-    onSurfaceVariant = MutedSilver,
-    outline = SlateOutline,
-    outlineVariant = Color(0xFF212738)
-)
+private fun buildDarkColorScheme(
+    colorTheme: AppColorTheme,
+    amoledBlack: Boolean
+): ColorScheme {
+    val primary = Color(colorTheme.primaryHex)
+    val secondary = Color(colorTheme.secondaryHex)
+    val tertiary = Color(colorTheme.tertiaryHex)
+    val bg = if (amoledBlack) AmoledBg else ObsidianBg
+    val surface = if (amoledBlack) AmoledSurface else SlateSurface
+    val elevated = if (amoledBlack) AmoledElevated else SlateElevated
+    val outline = if (amoledBlack) AmoledOutline else SlateOutline
+    val outlineVar = if (amoledBlack) Color(0xFF181C28) else Color(0xFF212738)
+
+    return darkColorScheme(
+        primary = primary,
+        onPrimary = Color.White,
+        primaryContainer = lerp(bg, primary, 0.28f),
+        onPrimaryContainer = lerp(Color.White, primary, 0.22f),
+        secondary = secondary,
+        onSecondary = Color(0xFF14110A),
+        secondaryContainer = lerp(bg, secondary, 0.26f),
+        onSecondaryContainer = lerp(Color.White, secondary, 0.25f),
+        tertiary = tertiary,
+        onTertiary = Color(0xFF001E2E),
+        background = bg,
+        onBackground = CoolWhite,
+        surface = surface,
+        onSurface = CoolWhite,
+        surfaceVariant = elevated,
+        onSurfaceVariant = MutedSilver,
+        outline = outline,
+        outlineVariant = outlineVar
+    )
+}
 
 private val LightColorScheme = lightColorScheme(
     primary = CrimsonLightPrimary,
@@ -64,6 +81,8 @@ val AppShapes = Shapes(
 @Composable
 fun KitsuneStreamTheme(
     darkTheme: Boolean = true,
+    colorTheme: AppColorTheme = AppColorTheme.KITSUNE_RED,
+    amoledBlack: Boolean = false,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -72,7 +91,7 @@ fun KitsuneStreamTheme(
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
-        darkTheme -> DarkColorScheme
+        darkTheme -> buildDarkColorScheme(colorTheme = colorTheme, amoledBlack = amoledBlack)
         else -> LightColorScheme
     }
 

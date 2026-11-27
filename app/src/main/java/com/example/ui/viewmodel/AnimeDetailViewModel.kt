@@ -6,6 +6,7 @@ import com.example.data.CloudflareBlockedException
 import com.example.data.JkAnimeRepository
 import com.example.model.AnimeDetail
 import com.example.model.AnimeProvider
+import com.example.model.AnimeSummary
 import com.example.model.EpisodeItem
 import com.example.model.EpisodePageRange
 import com.example.model.WatchHistoryEntry
@@ -28,7 +29,9 @@ sealed interface AnimeDetailUiState {
         val selectedPage: Int,
         val isLoadingEpisodes: Boolean = false,
         val isLoadingMoreEpisodes: Boolean = false,
-        val sortDescending: Boolean = false
+        val sortDescending: Boolean = false,
+        val similarAnimes: List<AnimeSummary> = emptyList(),
+        val isLoadingSimilar: Boolean = false
     ) : AnimeDetailUiState
     data class Error(val message: String, val blockedUrl: String? = null) : AnimeDetailUiState
 }
@@ -70,6 +73,7 @@ class AnimeDetailViewModel(
     private val cachedPages = mutableMapOf<Int, List<EpisodeItem>>()
     private val allEpisodesMap = LinkedHashMap<Int, EpisodeItem>()
     private var backgroundPagesJob: Job? = null
+    private var similarAnimesJob: Job? = null
 
     init {
         loadDetail()
@@ -102,6 +106,7 @@ class AnimeDetailViewModel(
 
     fun loadDetail() {
         backgroundPagesJob?.cancel()
+        similarAnimesJob?.cancel()
         cachedPages.clear()
         allEpisodesMap.clear()
         viewModelScope.launch {
@@ -127,12 +132,14 @@ class AnimeDetailViewModel(
                     _uiState.value = AnimeDetailUiState.Success(
                         detail = detail,
                         displayedEpisodes = initialDisplayed,
-                        selectedPage = initialSelectedPage
+                        selectedPage = initialSelectedPage,
+                        isLoadingSimilar = true
                     )
 
                     if (detail.animeId.isNotBlank()) {
                         startBackgroundEpisodePaging(detail)
                     }
+                    loadSimilarAnimes(detail)
                 }
                 .onFailure { err ->
                     _uiState.value = AnimeDetailUiState.Error(
@@ -140,6 +147,20 @@ class AnimeDetailViewModel(
                         blockedUrl = (err as? CloudflareBlockedException)?.targetUrl
                     )
                 }
+        }
+    }
+
+    private fun loadSimilarAnimes(detail: AnimeDetail) {
+        similarAnimesJob?.cancel()
+        similarAnimesJob = viewModelScope.launch {
+            val similar = runCatching { repository.getSimilarAnimes(detail) }
+                .getOrDefault(emptyList())
+            _uiState.update { state ->
+                (state as? AnimeDetailUiState.Success)?.copy(
+                    similarAnimes = similar,
+                    isLoadingSimilar = false
+                ) ?: state
+            }
         }
     }
 
@@ -155,13 +176,17 @@ class AnimeDetailViewModel(
 
             if (knownMaxPage > 1) {
                 val autoPages = if (knownMaxPage <= 25) {
-                    (2..knownMaxPage).toList()
+                    (1..knownMaxPage).toList()
                 } else {
-                    listOf(2, knownMaxPage)
+                    listOf(1, 2, knownMaxPage)
                 }
                 for (page in autoPages) {
-                    if (cachedPages[page]?.size == 12) continue
-                    val res = repository.fetchEpisodesPageResult(slug, detail.animeId, page).getOrNull() ?: break
+                    val cachedPage = cachedPages[page]
+                    val alreadyHasThumbnails = cachedPage != null &&
+                        cachedPage.size == 12 &&
+                        cachedPage.any { it.thumbnailUrl.isNotBlank() }
+                    if (alreadyHasThumbnails) continue
+                    val res = repository.fetchEpisodesPageResult(slug, detail.animeId, page).getOrNull() ?: continue
                     if (res.episodes.isEmpty()) continue
                     mergeFetchedPage(page, res.episodes, knownMaxPage = res.lastPage)
                 }

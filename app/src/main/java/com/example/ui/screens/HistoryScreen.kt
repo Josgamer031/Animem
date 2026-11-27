@@ -37,11 +37,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.BookmarkRemove
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -58,6 +62,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,6 +72,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -74,10 +80,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.model.AnimeProvider
+import com.example.model.CloudSyncState
 import com.example.model.FavoriteAnime
 import com.example.model.ProfileWatchStats
 import com.example.model.WatchHistoryEntry
@@ -85,6 +93,8 @@ import com.example.model.WatchStatus
 import com.example.model.formatWatchDuration
 import com.example.ui.components.AnimePosterCard
 import com.example.ui.components.EmptyStateView
+import com.example.ui.components.GoogleAuthUiHelper
+import com.example.ui.components.GoogleSignInOutcome
 import com.example.ui.components.SlidingPillTabBar
 import com.example.ui.components.SlidingTabItem
 import com.example.ui.components.StaggeredReveal
@@ -92,6 +102,7 @@ import com.example.ui.components.posterSharedKey
 import com.example.ui.components.profileAvatarDrawable
 import com.example.ui.components.tvFocusHighlight
 import com.example.ui.viewmodel.HistoryViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun HistoryScreen(
@@ -106,6 +117,7 @@ fun HistoryScreen(
     val selectedStatusFilter by viewModel.selectedStatusFilter.collectAsStateWithLifecycle()
     val profileStats by viewModel.profileStats.collectAsStateWithLifecycle()
     val activeProfile by viewModel.activeProfile.collectAsStateWithLifecycle()
+    val cloudSyncState by viewModel.cloudSyncState.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
     var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0 = Historial, 1 = Mi Lista, 2 = Estadísticas
 
@@ -207,6 +219,11 @@ fun HistoryScreen(
                 ),
                 selectedIndex = selectedTab,
                 onSelectTab = { selectedTab = it }
+            )
+
+            CloudSyncCompactBanner(
+                cloudSyncState = cloudSyncState,
+                onSyncNow = viewModel::syncCloudNow
             )
         }
 
@@ -356,6 +373,159 @@ fun HistoryScreen(
                         profileName = activeProfile.name,
                         stats = profileStats
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloudSyncCompactBanner(
+    cloudSyncState: CloudSyncState,
+    onSyncNow: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val credentialManager = remember(context) { CredentialManager.create(context) }
+    var isSigningIn by remember { mutableStateOf(false) }
+    var authError by remember { mutableStateOf<String?>(null) }
+
+    Surface(
+        color = if (cloudSyncState.isSignedIn) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.09f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(
+            1.dp,
+            if (cloudSyncState.isSignedIn) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("history_cloud_banner")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = when {
+                        cloudSyncState.isSyncing -> Icons.Rounded.CloudSync
+                        cloudSyncState.isSignedIn -> Icons.Rounded.CloudDone
+                        else -> Icons.Rounded.CloudOff
+                    },
+                    contentDescription = null,
+                    tint = if (cloudSyncState.isSignedIn) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(18.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (cloudSyncState.isSignedIn) {
+                            cloudSyncState.userEmail.ifBlank { cloudSyncState.userName }
+                        } else {
+                            stringResource(R.string.cloud_sync_disconnected)
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (cloudSyncState.isSignedIn) {
+                        Text(
+                            text = when {
+                                cloudSyncState.isSyncing -> stringResource(R.string.cloud_sync_syncing)
+                                cloudSyncState.errorMessage != null -> cloudSyncState.errorMessage.orEmpty()
+                                else -> stringResource(
+                                    R.string.cloud_sync_synced_counts,
+                                    cloudSyncState.syncedFavoritesCount,
+                                    cloudSyncState.syncedHistoryCount
+                                )
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else if (!authError.isNullOrBlank()) {
+                        Text(
+                            text = authError.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            if (cloudSyncState.isSignedIn) {
+                TextButton(
+                    onClick = onSyncNow,
+                    enabled = !cloudSyncState.isSyncing,
+                    modifier = Modifier.testTag("history_cloud_sync_button")
+                ) {
+                    if (cloudSyncState.isSyncing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.cloud_sync_now),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            } else {
+                TextButton(
+                    onClick = {
+                        if (!isSigningIn) {
+                            isSigningIn = true
+                            authError = null
+                            scope.launch {
+                                when (val outcome = GoogleAuthUiHelper.signInInteractive(context, credentialManager)) {
+                                    is GoogleSignInOutcome.Success -> onSyncNow()
+                                    is GoogleSignInOutcome.Error -> authError = outcome.message
+                                    GoogleSignInOutcome.Cancelled -> Unit
+                                }
+                                isSigningIn = false
+                            }
+                        }
+                    },
+                    enabled = !isSigningIn,
+                    modifier = Modifier.testTag("history_cloud_signin_button")
+                ) {
+                    if (isSigningIn) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text(
+                            text = "Conectar",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

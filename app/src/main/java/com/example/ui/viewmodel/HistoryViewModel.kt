@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.JkAnimeRepository
+import com.example.model.CloudSyncState
 import com.example.model.FavoriteAnime
 import com.example.model.ProfileWatchStats
 import com.example.model.UserProfile
@@ -18,6 +19,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class HistoryViewModel(private val repository: JkAnimeRepository) : ViewModel() {
+
+    val cloudSyncState: StateFlow<CloudSyncState> = repository.cloudSyncState
 
     val activeProfile: StateFlow<UserProfile> =
         (repository.activeProfile ?: MutableStateFlow(UserProfile("default", "Otaku", "kitsune")))
@@ -73,6 +76,12 @@ class HistoryViewModel(private val repository: JkAnimeRepository) : ViewModel() 
     fun removeFavorite(slug: String, providerId: String) {
         viewModelScope.launch {
             repository.removeFavorite(slug, providerId)
+        }
+    }
+
+    fun syncCloudNow() {
+        viewModelScope.launch {
+            repository.syncWithCloudNow()
         }
     }
 }

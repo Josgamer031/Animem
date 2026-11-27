@@ -5,6 +5,8 @@ import com.example.model.AnimeDetail
 import com.example.model.AnimeProvider
 import com.example.model.AnimeSchedule
 import com.example.model.AnimeSummary
+import com.example.model.AppColorTheme
+import com.example.model.CloudSyncState
 import com.example.model.DeviceMode
 import com.example.model.DirectoryFilter
 import com.example.model.DirectoryPage
@@ -12,6 +14,7 @@ import com.example.model.EpisodeItem
 import com.example.model.EpisodePageRange
 import com.example.model.FavoriteAnime
 import com.example.model.HomeFeed
+import com.example.model.HomeSupplementarySections
 import com.example.model.ResolvedVideo
 import com.example.model.ScheduleDay
 import com.example.model.ScheduleItem
@@ -21,6 +24,12 @@ import com.example.model.VideoServer
 import com.example.model.WatchHistoryEntry
 import com.example.model.WatchStatus
 import com.example.widget.WidgetSnapshotStore
+import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -30,6 +39,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.jsoup.Jsoup
 import java.net.URLEncoder
@@ -51,10 +63,25 @@ class JkAnimeRepository(context: Context? = null) {
     }
     private val streamResolver = VideoStreamResolver(httpClient)
     private val appContext = context?.applicationContext
+    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val historyStore = appContext?.let { WatchHistoryStore(it) }
     private val favoritesStore = appContext?.let { FavoritesStore(it) }
     private val profileStore = appContext?.let { ProfileStore(it) }
     private val preferencesStore = appContext?.let { UserPreferencesStore(it) }
+    private val cloudSyncRepo: CloudSyncRepository? = appContext?.let { ctx ->
+        runCatching {
+            if (FirebaseApp.getApps(ctx).isNotEmpty() || FirebaseApp.initializeApp(ctx) != null) {
+                CloudSyncRepository(ctx)
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+    private val cloudSyncMutex = Mutex()
+    private val lastCloudHistorySyncAt = ConcurrentHashMap<String, Long>()
+
+    private val _cloudSyncState = MutableStateFlow(CloudSyncState())
+    val cloudSyncState: StateFlow<CloudSyncState> = _cloudSyncState.asStateFlow()
 
     private val _selectedProvider = MutableStateFlow(AnimeProvider.JKANIME)
     val selectedProvider: StateFlow<AnimeProvider> = _selectedProvider.asStateFlow()
@@ -62,12 +89,84 @@ class JkAnimeRepository(context: Context? = null) {
     private val _pendingExploreGenre = MutableStateFlow<Pair<AnimeProvider, String>?>(null)
     val pendingExploreGenre: StateFlow<Pair<AnimeProvider, String>?> = _pendingExploreGenre.asStateFlow()
 
+    private val _pendingExploreFilter = MutableStateFlow<DirectoryFilter?>(null)
+    val pendingExploreFilter: StateFlow<DirectoryFilter?> = _pendingExploreFilter.asStateFlow()
+
     private val coverCache = ConcurrentHashMap<String, String>()
     private val latanimeEpisodeUrlCache = ConcurrentHashMap<String, Map<Int, String>>()
     private val maxEpisodeCache = ConcurrentHashMap<String, Int>()
     private val detailKnownExhaustiveCache = ConcurrentHashMap<String, Boolean>()
     @Volatile
     private var jkDirectoryFilterOptions: JkAnimeParser.DirectoryFilterOptions? = null
+
+    init {
+        if (cloudSyncRepo != null) {
+            val auth = runCatching { Firebase.auth }.getOrNull()
+            if (auth != null) {
+                repositoryScope.launch {
+                    auth.authStateFlow().collect { user ->
+                        if (user == null) {
+                            _cloudSyncState.value = CloudSyncState(
+                                isSignedIn = false,
+                                userEmail = "",
+                                userName = ""
+                            )
+                        } else {
+                            _cloudSyncState.value = _cloudSyncState.value.copy(
+                                isSignedIn = true,
+                                userEmail = user.email.orEmpty(),
+                                userName = user.displayName.orEmpty().ifBlank { user.email.orEmpty() },
+                                errorMessage = null
+                            )
+                            syncWithCloudNow()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun currentSignedInUserId(): String? {
+        if (cloudSyncRepo == null) return null
+        return runCatching { Firebase.auth.currentUser?.uid }.getOrNull()
+    }
+
+    suspend fun syncWithCloudNow(): Result<CloudSyncResult> = cloudSyncMutex.withLock {
+        val repo = cloudSyncRepo ?: return@withLock Result.failure(
+            IllegalStateException("Servicio de nube no disponible en este dispositivo.")
+        )
+        val user = runCatching { Firebase.auth.currentUser }.getOrNull()
+            ?: return@withLock Result.failure(
+                IllegalStateException("Inicia sesión con Google para sincronizar.")
+            )
+        _cloudSyncState.value = _cloudSyncState.value.copy(
+            isSignedIn = true,
+            userEmail = user.email.orEmpty(),
+            userName = user.displayName.orEmpty().ifBlank { user.email.orEmpty() },
+            isSyncing = true,
+            errorMessage = null
+        )
+        val localFavs = favoritesStore?.favoritesFlow?.firstOrNull().orEmpty()
+        val localHist = historyStore?.historyFlow?.firstOrNull().orEmpty()
+        val result = repo.syncAll(user.uid, localFavs, localHist)
+        result.onSuccess { syncRes ->
+            favoritesStore?.mergeFromCloud(syncRes.mergedFavorites)
+            historyStore?.mergeFromCloud(syncRes.mergedHistory)
+            _cloudSyncState.value = _cloudSyncState.value.copy(
+                isSyncing = false,
+                lastSyncedAtMillis = System.currentTimeMillis(),
+                syncedFavoritesCount = syncRes.totalFavorites,
+                syncedHistoryCount = syncRes.totalHistory,
+                errorMessage = null
+            )
+        }.onFailure { err ->
+            _cloudSyncState.value = _cloudSyncState.value.copy(
+                isSyncing = false,
+                errorMessage = err.localizedMessage ?: "Error al sincronizar respaldo"
+            )
+        }
+        return@withLock result
+    }
 
     fun setSelectedProvider(provider: AnimeProvider) {
         _selectedProvider.value = provider
@@ -78,10 +177,33 @@ class JkAnimeRepository(context: Context? = null) {
         _selectedProvider.value = provider
         if (slug.isNotBlank()) {
             _pendingExploreGenre.value = provider to slug
+            _pendingExploreFilter.value = DirectoryFilter(provider = provider, genre = slug, page = 1)
         }
     }
 
+    fun requestExploreCategory(
+        provider: AnimeProvider,
+        status: String = "",
+        type: String = "",
+        genre: String = ""
+    ) {
+        val normalizedGenre = if (genre.isNotBlank()) normalizeGenreKey(genre) else ""
+        _selectedProvider.value = provider
+        _pendingExploreFilter.value = DirectoryFilter(
+            provider = provider,
+            status = status,
+            type = type,
+            genre = normalizedGenre,
+            page = 1
+        )
+    }
+
     fun consumePendingExploreGenre() {
+        _pendingExploreGenre.value = null
+    }
+
+    fun consumePendingExploreFilter() {
+        _pendingExploreFilter.value = null
         _pendingExploreGenre.value = null
     }
 
@@ -96,6 +218,14 @@ class JkAnimeRepository(context: Context? = null) {
 
     suspend fun setDeviceMode(mode: DeviceMode, markSelected: Boolean = true) {
         preferencesStore?.setDeviceMode(mode, markSelected)
+    }
+
+    suspend fun setColorTheme(theme: AppColorTheme) {
+        preferencesStore?.setColorTheme(theme)
+    }
+
+    suspend fun setAmoledBlack(enabled: Boolean) {
+        preferencesStore?.setAmoledBlack(enabled)
     }
 
     suspend fun setAutoPlayNext(enabled: Boolean) {
@@ -159,19 +289,57 @@ class JkAnimeRepository(context: Context? = null) {
             providerId = detail.provider.id,
             profileId = currentProfileId
         )
-        return favoritesStore?.toggleFavorite(entry) ?: false
+        val isNowFavorite = favoritesStore?.toggleFavorite(entry) ?: false
+        val uid = currentSignedInUserId()
+        val syncRepo = cloudSyncRepo
+        if (uid != null && syncRepo != null) {
+            repositoryScope.launch {
+                if (isNowFavorite) {
+                    val saved = favoritesStore?.favoritesFlow?.firstOrNull()?.firstOrNull {
+                        it.profileId == currentProfileId &&
+                            it.providerId == detail.provider.id &&
+                            it.animeSlug == detail.slug
+                    } ?: entry
+                    syncRepo.upsertFavorite(uid, saved)
+                } else {
+                    syncRepo.deleteFavorite(uid, currentProfileId, detail.provider.id, detail.slug)
+                }
+            }
+        }
+        return isNowFavorite
     }
 
     suspend fun removeFavorite(slug: String, providerId: String) {
         val currentProfileId = profileStore?.activeProfileFlow?.firstOrNull()?.id
             ?: ProfileStore.DEFAULT_PROFILE_ID
         favoritesStore?.removeFavorite(currentProfileId, providerId, slug)
+        val uid = currentSignedInUserId()
+        val syncRepo = cloudSyncRepo
+        if (uid != null && syncRepo != null) {
+            repositoryScope.launch {
+                syncRepo.deleteFavorite(uid, currentProfileId, providerId, slug)
+            }
+        }
     }
 
     suspend fun updateFavoriteStatus(slug: String, providerId: String, status: WatchStatus) {
         val currentProfileId = profileStore?.activeProfileFlow?.firstOrNull()?.id
             ?: ProfileStore.DEFAULT_PROFILE_ID
         favoritesStore?.updateWatchStatus(currentProfileId, providerId, slug, status)
+        val uid = currentSignedInUserId()
+        val syncRepo = cloudSyncRepo
+        if (uid != null && syncRepo != null) {
+            repositoryScope.launch {
+                val updated = favoritesStore?.favoritesFlow?.firstOrNull()?.firstOrNull {
+                    it.profileId == currentProfileId &&
+                        it.providerId == providerId &&
+                        it.animeSlug == slug
+                }
+                if (updated != null) {
+                    syncRepo.upsertFavorite(uid, updated)
+                }
+            }
+        }
     }
 
     suspend fun createProfile(name: String, avatarKey: String): UserProfile? =
@@ -419,6 +587,61 @@ class JkAnimeRepository(context: Context? = null) {
         return applyCachedCovers(feed)
     }
 
+    suspend fun getHomeSupplementarySections(
+        provider: AnimeProvider = _selectedProvider.value
+    ): HomeSupplementarySections {
+        val todayIndex = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_WEEK)
+        val todayKey = when (todayIndex) {
+            java.util.Calendar.MONDAY -> "lunes"
+            java.util.Calendar.TUESDAY -> "martes"
+            java.util.Calendar.WEDNESDAY -> "miercoles"
+            java.util.Calendar.THURSDAY -> "jueves"
+            java.util.Calendar.FRIDAY -> "viernes"
+            java.util.Calendar.SATURDAY -> "sabado"
+            else -> "domingo"
+        }
+
+        return withTimeoutOrNull(9_000L) {
+            coroutineScope {
+                val scheduleDeferred = async {
+                    runCatching { getSchedule(provider).getOrNull() }.getOrNull()
+                }
+                val moviesDeferred = async {
+                    runCatching {
+                        browseDirectory(DirectoryFilter(type = "peliculas", provider = provider))
+                            .getOrNull()?.items.orEmpty()
+                    }.getOrNull().orEmpty()
+                }
+                val ovasDeferred = async {
+                    runCatching {
+                        browseDirectory(DirectoryFilter(type = "ovas", provider = provider))
+                            .getOrNull()?.items.orEmpty()
+                    }.getOrNull().orEmpty()
+                }
+                val completedDeferred = async {
+                    runCatching {
+                        browseDirectory(DirectoryFilter(status = "finalizado", provider = provider))
+                            .getOrNull()?.items.orEmpty()
+                    }.getOrNull().orEmpty()
+                }
+
+                val schedule = scheduleDeferred.await()
+                val todayDay = schedule?.days?.firstOrNull { it.dayKey == todayKey }
+                    ?.takeIf { it.items.isNotEmpty() }
+                    ?: schedule?.days?.firstOrNull { it.items.isNotEmpty() }
+
+                HomeSupplementarySections(
+                    todayDayLabel = todayDay?.dayLabel.orEmpty(),
+                    todaySchedule = todayDay?.items.orEmpty().take(18),
+                    movies = moviesDeferred.await().take(18),
+                    ovas = ovasDeferred.await().take(18),
+                    completed = completedDeferred.await().take(18),
+                    provider = provider
+                )
+            }
+        } ?: HomeSupplementarySections(provider = provider)
+    }
+
     private suspend fun fetchJkCoverFromDetail(slug: String): String {
         val detailUrl = "${httpClient.baseUrl}/$slug/"
         val html = httpClient.fetchHtml(detailUrl, referer = "${httpClient.baseUrl}/")
@@ -437,6 +660,10 @@ class JkAnimeRepository(context: Context? = null) {
         }
         feed.latestEpisodes.forEach { ep ->
             if (ep.coverUrl.isNotBlank()) coverCache["$pid:${ep.animeSlug}"] = ep.coverUrl
+            if (ep.episodeNumber > 0) {
+                val key = "$pid:${ep.animeSlug}"
+                maxEpisodeCache[key] = maxOf(maxEpisodeCache[key] ?: 0, ep.episodeNumber)
+            }
         }
     }
 
@@ -616,7 +843,11 @@ class JkAnimeRepository(context: Context? = null) {
         when (filter.provider) {
             AnimeProvider.LATANIME -> browseLatanimeDirectory(filter)
             AnimeProvider.JKANIME -> browseJkAnimeDirectory(
-                filter.copy(status = "", type = "")
+                if (filter.genre.isNotBlank() || filter.query.isNotBlank()) {
+                    filter.copy(status = "", type = "")
+                } else {
+                    filter
+                }
             )
         }
     }
@@ -936,6 +1167,64 @@ class JkAnimeRepository(context: Context? = null) {
         }
     }
 
+    suspend fun getSimilarAnimes(detail: AnimeDetail): List<AnimeSummary> {
+        val normalizedGenres = detail.genres
+            .map { normalizeGenreKey(it) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(2)
+
+        val candidatesByGenre: List<List<AnimeSummary>> = if (normalizedGenres.isNotEmpty()) {
+            coroutineScope {
+                normalizedGenres.map { genreSlug ->
+                    async {
+                        runCatching {
+                            browseDirectory(
+                                DirectoryFilter(
+                                    provider = detail.provider,
+                                    genre = genreSlug,
+                                    page = 1
+                                )
+                            ).getOrNull()?.items.orEmpty()
+                        }.getOrDefault(emptyList())
+                    }
+                }.awaitAll()
+            }
+        } else {
+            val typeFallback = if (detail.type.contains("pel", ignoreCase = true)) "peliculas" else "animes"
+            listOf(
+                runCatching {
+                    browseDirectory(
+                        DirectoryFilter(
+                            provider = detail.provider,
+                            type = typeFallback,
+                            page = 1
+                        )
+                    ).getOrNull()?.items.orEmpty()
+                }.getOrDefault(emptyList())
+            )
+        }
+
+        val scoreMap = LinkedHashMap<String, Int>()
+        val itemBySlug = LinkedHashMap<String, AnimeSummary>()
+        candidatesByGenre.forEachIndexed { idx, list ->
+            val genreWeight = if (idx == 0) 12 else 9
+            list.forEach { item ->
+                if (item.slug.equals(detail.slug, ignoreCase = true)) return@forEach
+                val existing = itemBySlug[item.slug]
+                if (existing == null || (existing.coverUrl.isBlank() && item.coverUrl.isNotBlank())) {
+                    itemBySlug[item.slug] = item
+                }
+                val bonus = if (item.coverUrl.isNotBlank()) 2 else 0
+                scoreMap[item.slug] = (scoreMap[item.slug] ?: 0) + genreWeight + bonus
+            }
+        }
+
+        return itemBySlug.values
+            .sortedByDescending { scoreMap[it.slug] ?: 0 }
+            .take(12)
+    }
+
     private suspend fun getLatanimeDetail(slug: String): AnimeDetail {
         val base = AnimeProvider.LATANIME.baseUrl
         val detailUrl = "$base/anime/$slug"
@@ -978,8 +1267,18 @@ class JkAnimeRepository(context: Context? = null) {
             coverCache["${AnimeProvider.JKANIME.id}:$slug"] = parsed.coverUrl
         }
 
+        val sortedRanges = parsed.pageRanges.sortedBy { it.page }
+        if (sortedRanges != parsed.pageRanges) {
+            parsed = parsed.copy(pageRanges = sortedRanges)
+        }
+
         val firstPageNum = parsed.pageRanges.firstOrNull()?.page ?: 1
         val ajaxPage1 = if (parsed.animeId.isNotBlank()) {
+            fetchEpisodesPageResult(slug, parsed.animeId, 1).getOrNull()
+        } else {
+            null
+        }
+        val ajaxFirstRange = if (parsed.animeId.isNotBlank() && firstPageNum > 1) {
             fetchEpisodesPageResult(slug, parsed.animeId, firstPageNum).getOrNull()
         } else {
             null
@@ -991,13 +1290,28 @@ class JkAnimeRepository(context: Context? = null) {
             val existing = mergedEpisodesMap[ep.number]
             mergedEpisodesMap[ep.number] = if (existing == null || ep.thumbnailUrl.isNotBlank()) ep else existing
         }
+        ajaxFirstRange?.episodes?.forEach { ep ->
+            val existing = mergedEpisodesMap[ep.number]
+            mergedEpisodesMap[ep.number] = if (existing == null || ep.thumbnailUrl.isNotBlank()) ep else existing
+        }
 
-        // Critical fallback: if static parse + AJAX pagination returned 0 episodes, force a rendered WebView pass
-        if (mergedEpisodesMap.isEmpty()) {
+        val jkKeyInitial = "${AnimeProvider.JKANIME.id}:$slug"
+        val initialMaxEp = maxOf(
+            mergedEpisodesMap.keys.maxOrNull() ?: 0,
+            maxEpisodeCache[jkKeyInitial] ?: 0
+        )
+        val initialMinEp = mergedEpisodesMap.keys.minOrNull() ?: 0
+        val looksIncompleteAfterStatic = mergedEpisodesMap.isEmpty() ||
+            (initialMaxEp > 2 && mergedEpisodesMap.size <= 3) ||
+            (initialMinEp > 1 && !mergedEpisodesMap.containsKey(1))
+
+        // Critical fallback: if static parse + AJAX returned 0 or only the latest episode shortcut, force rendered WebView pass
+        if (looksIncompleteAfterStatic) {
             val lateRendered = runCatching {
                 httpClient.fetchRenderedHtml(detailUrl, referer = "${httpClient.baseUrl}/") { candidate ->
                     val check = JkAnimeParser.parseAnimeDetail(slug, candidate)
-                    check.episodes.isNotEmpty() ||
+                    check.episodes.size > mergedEpisodesMap.size ||
+                        check.pageRanges.isNotEmpty() ||
                         (check.animeId.isNotBlank() && check.animeId != parsed.animeId)
                 }
             }.getOrNull()
@@ -1005,7 +1319,7 @@ class JkAnimeRepository(context: Context? = null) {
                 val lateParsed = JkAnimeParser.parseAnimeDetail(slug, lateRendered)
                 if (parsed.animeId.isBlank() && lateParsed.animeId.isNotBlank()) {
                     parsed = parsed.copy(animeId = lateParsed.animeId)
-                    fetchEpisodesPageResult(slug, lateParsed.animeId, firstPageNum).getOrNull()
+                    fetchEpisodesPageResult(slug, lateParsed.animeId, 1).getOrNull()
                         ?.episodes?.forEach { ep -> mergedEpisodesMap[ep.number] = ep }
                 }
                 lateParsed.episodes.forEach { ep ->
@@ -1013,7 +1327,7 @@ class JkAnimeRepository(context: Context? = null) {
                     mergedEpisodesMap[ep.number] = if (existing == null || ep.thumbnailUrl.isNotBlank()) ep else existing
                 }
                 if (parsed.pageRanges.isEmpty() && lateParsed.pageRanges.isNotEmpty()) {
-                    parsed = parsed.copy(pageRanges = lateParsed.pageRanges)
+                    parsed = parsed.copy(pageRanges = lateParsed.pageRanges.sortedBy { it.page })
                 }
                 if (parsed.totalEpisodesText.isBlank() && lateParsed.totalEpisodesText.isNotBlank()) {
                     parsed = parsed.copy(totalEpisodesText = lateParsed.totalEpisodesText)
@@ -1032,11 +1346,19 @@ class JkAnimeRepository(context: Context? = null) {
         } else {
             1
         }
-        val maxDirectEp = mergedEpisodesMap.keys.maxOrNull() ?: 0
+        val maxDirectEp = maxOf(
+            mergedEpisodesMap.keys.maxOrNull() ?: 0,
+            maxEpisodeCache[jkKeyInitial] ?: 0
+        )
         val maxFromDirectEp = if (maxDirectEp in 1..2000) ((maxDirectEp - 1) / 12) + 1 else 1
         val estimatedPages = maxOf(maxFromRanges, maxFromAjax, maxFromText, maxFromDirectEp)
 
-        if (mergedEpisodesMap.isEmpty()) {
+        val minEpAfterRender = mergedEpisodesMap.keys.minOrNull() ?: 0
+        val stillMissingEpisodes = mergedEpisodesMap.isEmpty() ||
+            (maxDirectEp > 1 && mergedEpisodesMap.size < minOf(maxDirectEp, 12) && !mergedEpisodesMap.containsKey(1)) ||
+            (minEpAfterRender > 1 && !mergedEpisodesMap.containsKey(1))
+
+        if (stillMissingEpisodes) {
             val targetCount = when {
                 maxDirectEp in 1..2000 -> maxDirectEp
                 totalCountFromText != null && !parsed.status.contains("estreno", ignoreCase = true) -> totalCountFromText
@@ -1044,13 +1366,17 @@ class JkAnimeRepository(context: Context? = null) {
             }
             if (targetCount in 1..2000) {
                 for (num in 1..targetCount) {
-                    mergedEpisodesMap[num] = EpisodeItem(
-                        number = num,
-                        label = "Episodio $num",
-                        url = "${httpClient.baseUrl}/$slug/$num/"
+                    mergedEpisodesMap.putIfAbsent(
+                        num,
+                        EpisodeItem(
+                            number = num,
+                            label = "Episodio $num",
+                            url = "${httpClient.baseUrl}/$slug/$num/"
+                        )
                     )
                 }
-            } else if (!parsed.status.contains("estreno", ignoreCase = true) &&
+            } else if (mergedEpisodesMap.isEmpty() &&
+                !parsed.status.contains("estreno", ignoreCase = true) &&
                 !parsed.status.contains("proxim", ignoreCase = true)
             ) {
                 // Probe Episode 1 directly so ongoing series without numeric count still expose playable episodes
@@ -1267,6 +1593,20 @@ class JkAnimeRepository(context: Context? = null) {
                 latestEntry = updatedEntry
             )
         }
+        val uid = currentSignedInUserId()
+        val syncRepo = cloudSyncRepo
+        if (uid != null && syncRepo != null) {
+            val throttleKey = "${currentProfileId}:${updatedEntry.providerId}:${updatedEntry.animeSlug}:${updatedEntry.episodeNumber}"
+            val now = System.currentTimeMillis()
+            val lastSync = lastCloudHistorySyncAt[throttleKey] ?: 0L
+            val nearEnd = updatedEntry.durationMs > 0L && updatedEntry.positionMs >= updatedEntry.durationMs - 20_000L
+            if (now - lastSync >= 12_000L || nearEnd) {
+                lastCloudHistorySyncAt[throttleKey] = now
+                repositoryScope.launch {
+                    syncRepo.upsertHistory(uid, updatedEntry)
+                }
+            }
+        }
     }
 
     suspend fun removeWatchHistoryEntry(slug: String, episodeNumber: Int, providerId: String) {
@@ -1274,6 +1614,13 @@ class JkAnimeRepository(context: Context? = null) {
             ?: ProfileStore.DEFAULT_PROFILE_ID
         historyStore?.removeEntry(currentProfileId, providerId, slug, episodeNumber)
         syncWidgetContinueWatching(currentProfileId)
+        val uid = currentSignedInUserId()
+        val syncRepo = cloudSyncRepo
+        if (uid != null && syncRepo != null) {
+            repositoryScope.launch {
+                syncRepo.deleteHistoryEntry(uid, currentProfileId, providerId, slug, episodeNumber)
+            }
+        }
     }
 
     suspend fun clearWatchHistory() {
@@ -1281,6 +1628,13 @@ class JkAnimeRepository(context: Context? = null) {
             ?: ProfileStore.DEFAULT_PROFILE_ID
         historyStore?.clearProfile(currentProfileId)
         syncWidgetContinueWatching(currentProfileId)
+        val uid = currentSignedInUserId()
+        val syncRepo = cloudSyncRepo
+        if (uid != null && syncRepo != null) {
+            repositoryScope.launch {
+                syncRepo.clearProfileHistory(uid, currentProfileId)
+            }
+        }
     }
 
     private suspend fun syncWidgetContinueWatching(profileId: String) {

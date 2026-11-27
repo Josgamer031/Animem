@@ -8,6 +8,12 @@ val SlateSurface = Color(0xFF131722)
 val SlateElevated = Color(0xFF1B2131)
 val SlateOutline = Color(0xFF2B3348)
 
+// Pure Black AMOLED Palette
+val AmoledBg = Color(0xFF000000)
+val AmoledSurface = Color(0xFF08090D)
+val AmoledElevated = Color(0xFF11141D)
+val AmoledOutline = Color(0xFF222838)
+
 val CrimsonPrimary = Color(0xFFFF3B5C)
 val CrimsonContainer = Color(0xFF4D1020)
 val OnCrimsonContainer = Color(0xFFFFD9DE)
